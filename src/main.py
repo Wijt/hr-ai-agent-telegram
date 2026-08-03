@@ -12,7 +12,7 @@ agent = Agent(
     model=get_model(),
     instructions="Sen samimi, kısa ve bağlamı koruyan bir Türkçe sohbet asistanısın.",
     markdown=True,
-    db=SqliteDb(db_file="tmp/agent.db"),
+    db=SqliteDb(db_file="data/agent.db"),
     add_history_to_context=True,
 )
 

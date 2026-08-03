@@ -17,7 +17,10 @@ build/
 .env.*
 !.env.example
 
-# Agno / app data
+# App data — kalıcı çalışma zamanı verisi (session db, Aşama 4'te aday dosyaları).
+# Klasörün kendisi izlenmiyor çünkü içeriği ortama/kullanıcıya özel (ve Aşama 4'te
+# PII/CV içerecek) — ama gerçek kalıcı veri, "tmp" değil.
+data/
 tmp/
 *.db
 *.sqlite
