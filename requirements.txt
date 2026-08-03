@@ -3,3 +3,4 @@ agno[os,telegram]
 openai
 python-dotenv
 uvicorn
+sqlalchemy

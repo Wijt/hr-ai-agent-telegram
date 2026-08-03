@@ -51,7 +51,7 @@ flowchart TB
 
 - [x] Proje deposu oluşturuldu
 - [x] Mimari kararlar dokümante edildi (`ARCHITECTURE.md`, `AGENTS.md`)
-- [ ] **Aşama 0** — Hello World (Telegram bağlantısı, tool'suz sohbet)
+- [x] **Aşama 0** — Hello World (Telegram bağlantısı, tool'suz sohbet)
 - [ ] **Aşama 1** — Sohbet + session (konuşma geçmişi)
 - [ ] **Aşama 2** — Dinamik kriter + tekli CV analizi (`cv_processing_workflow`, PDF validasyonu, extraction, analiz)
 - [ ] **Aşama 3** — Toplu CV + paralel skorlama (JSON çıktı)

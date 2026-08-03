@@ -1,17 +1,19 @@
 from agno.agent import Agent
+from agno.db.sqlite import SqliteDb
 from agno.os import AgentOS
 from agno.os.interfaces.telegram import Telegram
 
 from config import settings
 from models.model_factory import get_model
 
-# Aşama 0 (ARCHITECTURE.md §13): tool'suz, en yalın sohbet ajanı.
-# Amaç sadece Telegram <-> AgentOS bağlantısının uçtan uca çalıştığını doğrulamak.
+# Aşama 1 (ARCHITECTURE.md §13): tool'suz sohbet ajanı + kalıcı session/geçmiş.
 agent = Agent(
     name="HR Bot",
     model=get_model(),
     instructions="Sen samimi, kısa ve bağlamı koruyan bir Türkçe sohbet asistanısın.",
     markdown=True,
+    db=SqliteDb(db_file="tmp/agent.db"),
+    add_history_to_context=True,
 )
 
 agent_os = AgentOS(
