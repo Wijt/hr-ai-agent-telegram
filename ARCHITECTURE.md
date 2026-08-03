@@ -116,6 +116,13 @@ istemiyoruz. Bu yüzden:
 
 ## 6. Veri Modelleri
 
+**`PdfValidationResult`** (§8'deki 6 kontrolün tipli çıktısı — LLM'siz):
+```
+status: EMPTY_FILE | NOT_A_PDF | ENCRYPTED | CORRUPTED | EMPTY_PDF | NO_EXTRACTABLE_TEXT | VALID
+extracted_text: str | None     # sadece status == VALID iken dolu
+user_message: str | None       # sadece status != VALID iken dolu, Telegram'a birebir gönderilir
+```
+
 **`CandidateProfile`** (LLM Extraction'ın ürettiği ortak şema — ödevin istediği
 "farklı PDF formatlarını normalize eden JSON"):
 ```
@@ -152,11 +159,32 @@ dynamicScores/averageScore/hrEvaluation`) — camelCase, ödev örneğine sadık
 
 ## 8. PDF Doğrulama
 
-`submit_cv` içinde, extraction'dan **önce**, deterministik bir `PdfValidator`:
-- Dosya `pypdf.PdfReader` ile açılamıyorsa (şifreli/bozuk) → kullanıcıya net hata,
-  süreç orada kesilir (ödevin "Hata Kontrolü" gereksinimi).
-- Açılabiliyor ama metin çıkmıyorsa (taranmış görüntü PDF vb.) → ayrı bir hata
-  mesajıyla reddedilir (v1 kapsamında OCR yok).
+`submit_cv` içinde, extraction'dan (dolayısıyla **her türlü LLM çağrısından**) **önce**
+çalışan, tamamen deterministik, LLM'siz bir `PdfValidator` servisi. Amaç iki yönlü:
+(1) ödevin "hatalı format tespit ederse süreci kesip net hata mesajı dönmeli"
+gereksinimini karşılamak, (2) geçersiz dosyalar için gereksiz API çağrısı yapmamak.
+
+`PdfValidator.validate(content: bytes, filename: str) -> PdfValidationResult`,
+sırayla şu kontrolleri yapar — **ilk başarısız kontrolde durur**, sonrakiler
+çalışmaz:
+
+| # | Kontrol | Nasıl | Durum kodu | Kullanıcıya dönen mesaj |
+|---|---|---|---|---|
+| 1 | Boş dosya | `len(content) == 0` | `EMPTY_FILE` | "Gönderdiğin dosya boş görünüyor." |
+| 2 | Gerçekten PDF mi | dosya uzantısına **güvenilmez**; ilk 5 bayt `%PDF-` magic number kontrolü | `NOT_A_PDF` | "Bu dosya bir PDF değil gibi görünüyor. Lütfen CV'ni PDF formatında gönder." |
+| 3 | Şifreli mi | `pypdf.PdfReader`, `reader.is_encrypted` → önce boş parolayla decrypt denenir, olmazsa | `ENCRYPTED` | "Bu PDF şifre korumalı, açamıyorum. Şifresiz bir kopya gönderir misin?" |
+| 4 | Bozuk / açılamıyor | `PdfReadError` / `PdfStreamError` yakalanır | `CORRUPTED` | "PDF dosyası bozuk görünüyor, açamadım." |
+| 5 | Sayfasız | yapısal olarak geçerli ama `len(reader.pages) == 0` | `EMPTY_PDF` | "Bu PDF'in içinde hiç sayfa yok." |
+| 6 | Metin çıkarılamıyor | tüm sayfalardan `extract_text()` birleştirilir, toplam < 50 karakter | `NO_EXTRACTABLE_TEXT` | "Bu PDF'ten metin çıkaramadım (muhtemelen taranmış görüntü). Şu an yalnızca metin tabanlı PDF'leri işleyebiliyorum." |
+
+Sadece **hepsi geçerse** `PdfValidationResult(status=VALID, extracted_text=...)`
+döner ve extraction/analysis/scoring zincirine girilir. `filename` uzantısına hiç
+güvenilmemesi bilinçli bir karar: kullanıcı `.jpg` bir dosyayı `cv.pdf` diye
+yeniden adlandırıp gönderebilir, magic-number kontrolü bunu yakalar.
+
+Bu servis LLM içermediği için `tests/test_pdf_validator.py` içinde **gerçek,
+elle hazırlanmış bozuk/şifreli/boş/sahte-uzantılı örnek dosyalarla** birim testi
+yazılacak — mock'a gerek yok, çünkü hiçbir dış çağrı (LLM, ağ) içermiyor.
 
 ## 9. Bilinen Riskler ve Açık Sorular
 

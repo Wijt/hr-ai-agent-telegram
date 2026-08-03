@@ -69,12 +69,14 @@ submit_cv(run_context, files):
         return "Bir PDF dosyası göndermelisin."
     dosya = files[0]
 
-    validasyon = PdfValidator.validate(dosya)      # services/pdf_validator.py
-    if validasyon başarısız:
-        return validasyon.hata_mesajı              # bozuk/şifreli/okunamaz PDF
+    # services/pdf_validator.py — LLM'siz, deterministik, 6 kontrol sırayla
+    # (boş dosya / gerçekten PDF mi / şifreli / bozuk / sayfasız / metin çıkmıyor)
+    # bkz. ARCHITECTURE.md §8
+    sonuc = PdfValidator.validate(dosya.content, dosya.filename)
+    if sonuc.status != VALID:
+        return sonuc.user_message                  # süreç burada kesilir, hiçbir LLM çağrısı yapılmaz
 
-    metin = extract_text(dosya)                    # services/pdf_text_extractor.py
-    profile = ExtractionAgent.run(metin)            # -> CandidateProfile (output_schema)
+    profile = ExtractionAgent.run(sonuc.extracted_text)   # -> CandidateProfile (output_schema)
 
     if session_state["mode"] == "collecting_batch":
         if session_state["dynamic_criteria"] boş:
