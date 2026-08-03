@@ -2,8 +2,8 @@
 
 `ARCHITECTURE.md`'de tanımlanan sistemin ajan/tool/pipeline envanteri. Bu dosya, her
 parçanın *neden var olduğunu*, *ne zaman çağrıldığını* ve *hangi şemayla konuştuğunu*
-kayıt altına alır — implementasyon sırasında `src/hrbot/agents/` altındaki kodun
-doğrudan karşılığıdır.
+kayıt altına alır — `src/` altındaki düz modüllerin (`bot.py`, `agents.py`,
+`workflows.py`) doğrudan karşılığıdır.
 
 ## 0. Çalışma İlkeleri (KISS)
 
@@ -49,26 +49,31 @@ CV pipeline'ı** modeli:
   tarifi**. Hem tekli modda (bir kez) hem toplu modda (N kez, paralel) **birebir aynı
   nesne** çalıştırılır. Kod tekrarı yok, iki ayrı mimari yok.
 - **Extraction / Analysis / Scoring** ajanları LLM tarafından *seçilmez* —
-  `cv_processing_workflow`'un bir adımı olarak (Extraction) ya da onu saran bir
-  fonksiyon/executor içinden (Analysis, Scoring) çağrılır. Bu ayrım kararlılık için
-  kritik (bkz. `ARCHITECTURE.md` §5).
+  Extraction `cv_processing_workflow`'un bir adımı olarak, Analysis `submit_cv`
+  tool'unun içinden (workflow bittikten hemen sonra), Scoring `finalize_batch`'in
+  paralel dalları içinden çağrılır. Bu ayrım kararlılık için kritik
+  (bkz. `ARCHITECTURE.md` §5).
 
 ---
 
 ## 1. Router Agent
 
-**Dosya:** `agents/chat_agent.py`
-**Bağlı olduğu arayüz:** Agno `Telegram` interface (`AgentOS(interfaces=[Telegram(agent=router_agent)])`)
+**Dosya:** `bot.py` (`chat_agent`)
+**Bağlı olduğu arayüz:** Agno `Telegram` interface (`AgentOS(interfaces=[Telegram(agent=chat_agent)])`)
 **Model:** `model_factory.get_model()` (varsayılan OpenAI, env ile Ollama'ya geçer)
 **db:** kendi `db`'si yok — `AgentOS(db=SqliteDb(...))` seviyesinde tanımlanır ve
-kendi db'si olmayan her agent/team/workflow'a otomatik atanır (bkz.
-`ARCHITECTURE.md` §2). Aşama 2-3'te eklenecek diğer bileşenler aynı dosyayı tek
-tanımdan paylaşır — her birine ayrı ayrı `db=` yazmaya gerek yok.
+kendi db'si olmayan her agent/workflow'a otomatik atanır (bkz. `ARCHITECTURE.md` §2;
+kaynak: `agno/os/app.py`, agent'lar ve workflow'lar için ayrı ayrı doğrulandı).
 **Diğer ayarlar:** `send_media_to_model=False`, `store_media=True` — PDF ham içeriği
 LLM'e gönderilmez, sadece tool erişimi için saklanır (bkz. `ARCHITECTURE.md` §10.1).
-**`pre_hook`:** o turda ekli dosya (`files`) varsa `tool_choice="submit_cv"` olarak
-sabitlenir — dosya geldiğinde `submit_cv`'nin çağrılması LLM kararına değil koda
-bağlıdır (bkz. `ARCHITECTURE.md` §5).
+**`pre_hooks=[force_submit_cv_on_file]`:** o turda ekli dosya (`run_input.files`)
+varsa `agent.tool_choice` `submit_cv`'ye sabitlenir, yoksa `None`'a geri alınır
+(mutasyon Agent nesnesinde kalıcı olduğu için her turda açıkça set edilir — Agno
+2.8.6 kaynağından doğrulandı). Dosya geldiğinde `submit_cv`'nin çağrılması böylece
+LLM kararına değil koda bağlıdır (bkz. `ARCHITECTURE.md` §5). `submit_cv`'nin
+`stop_after_tool_call=True` olması bu zorlamanın yan etkisini de kapatır: zorlanan
+tool aynı run içinde tekrar tekrar çağrılamaz (sonsuz döngü koruması) ve dönüşü
+LLM'e geri gitmeden kullanıcıya birebir iletilir.
 
 **Instructions (özet, Türkçe):**
 - Varsayılan davranış: samimi, kısa, bağlamı koruyan bir sohbet asistanı gibi yanıt ver.
@@ -86,9 +91,9 @@ bağlıdır (bkz. `ARCHITECTURE.md` §5).
 | Tool | İmza | Ne yapar |
 |---|---|---|
 | `set_dynamic_criteria` | `(run_context, criteria: list[str]) -> str` | Kullanıcının serbest metnini LLM zaten tool-call argümanı olarak listeye çevirir; `session_state["dynamic_criteria"]` güncellenir. |
-| `start_batch_session` | `(run_context) -> str` | `session_state["mode"] = "collecting_batch"`, `batch_files = []`. Kriter tanımlı değilse kullanıcıyı önce kritere yönlendirir. |
-| `submit_cv` | `(run_context, files: Optional[Sequence[File]] = None) -> str` | Bkz. §2. **idle**'da `cv_processing_workflow`'u hemen çalıştırıp analiz eder; **batch**'te dosyayı işlemeden biriktirir (işleme `finalize_batch`'e ertelenir — bkz. §3). `pre_hook` sayesinde dosya varken çağrılması garanti. |
-| `finalize_batch` | `(run_context) -> str` | Bkz. §3. Biriktirilen her dosya için **aynı `cv_processing_workflow`'u paralel olarak** çalıştırır, skorlar, JSON döner, mode'u `idle`'a çeker. |
+| `submit_cv` | `(run_context, criteria: Optional[list[str]] = None, files: Optional[Sequence[File]] = None) -> str` | Bkz. §3. **idle**'da `cv_processing_workflow`'u hemen çalıştırıp `analysis_agent` ile raporlar; (Aşama 3'te) **batch**'te dosyayı işlemeden biriktirir. `criteria` parametresi, kullanıcı dosyayla **aynı mesajda** kriter yazdıysa kaydetmek için (tool_choice zorlandığında `set_dynamic_criteria` çağrılamaz). `files` Agno'nun built-in parametresi — o turun ekli dosyaları otomatik enjekte edilir. `pre_hooks` sayesinde dosya varken çağrılması garanti. `stop_after_tool_call=True`: dönüş kullanıcıya birebir gider. |
+| `start_batch_session` *(Aşama 3)* | `(run_context) -> str` | `session_state["mode"] = "collecting_batch"`, `batch_files = []`. Kriter tanımlı değilse kullanıcıyı önce kritere yönlendirir. |
+| `finalize_batch` *(Aşama 3)* | `(run_context) -> str` | Bkz. §4. Biriktirilen her dosya için **aynı `cv_processing_workflow`'u paralel olarak** çalıştırır, skorlar, JSON döner, mode'u `idle`'a çeker. |
 
 **Kullanılmayan/gerek olmayan tool'lar:** `reset` — Agno'nun native `/new` komutu
 session_state'i zaten sıfırlıyor, tekrar yazılmayacak.
@@ -100,67 +105,71 @@ session_state'i zaten sıfırlıyor, tekrar yazılmayacak.
 Bir adayı işlemenin **tek** tanımı. Hem tekli hem toplu mod bunu birebir aynı nesne
 olarak kullanır — biri bir kez, öbürü N kez paralel:
 
-```python
-cv_processing_workflow = Workflow(
-    steps=[
-        Step(name="validate_pdf", executor=validate_pdf_step),   # PdfValidator sarmalar, bkz. ARCHITECTURE.md §9
-        Step(name="extract_cv", agent=extraction_agent),          # -> CandidateProfile (output_schema)
-        # Aşama 4'te (opsiyonel, bkz. ARCHITECTURE.md §13) eklenecek:
-        # Step(name="store_to_knowledge", executor=store_to_knowledge_step),
-    ]
-)
+**Dosya:** `workflows.py` — gerçek kod:
 
+```python
 def validate_pdf_step(step_input: StepInput) -> StepOutput:
-    sonuc = PdfValidator.validate(step_input.files[0].content, step_input.files[0].filename)
-    if sonuc.status != VALID:
-        return StepOutput(content=sonuc.user_message, stop=True)   # pipeline burada durur
-    return StepOutput(content=sonuc.extracted_text)
+    files = step_input.files or []
+    if not files:  # Telegram 20MB üzeri dosyayı hiç indirmez
+        return StepOutput(content="Dosyayı alamadım. 20MB'tan küçük bir PDF dener misin?", stop=True)
+    raw = files[0].content if isinstance(files[0].content, bytes) else b""
+    text, error = validate_pdf(raw)              # bkz. ARCHITECTURE.md §9 — LLM'siz
+    if error:
+        return StepOutput(content=error, stop=True)   # resmi early-stop deseni; extract hiç çalışmaz
+    return StepOutput(content=text)
+
+cv_processing_workflow = Workflow(
+    name="CV Processing",
+    steps=[
+        Step(name="validate_pdf", executor=validate_pdf_step),
+        Step(name="extract_cv", agent=extraction_agent),   # -> CandidateProfile (output_schema)
+        # Aşama 4'te (opsiyonel): Step(name="store_to_knowledge", executor=...)
+    ],
+)
 ```
 
-`extract_cv` çıktısı (`CandidateProfile`, tipli) → çağıranın (`single_cv_workflow`
-ya da batch'teki executor) `previous_step_content`'i olur.
+`extract_cv` çıktısı (`CandidateProfile`, **tipli Pydantic nesnesi** — Agno string'e
+çevirmiyor, kaynak + canlı testle doğrulandı) → `run_output.content` olarak çağırana
+döner. Erken durmayı çağıran `workflows.stopped_early(run_output)` ile anlar
+(`step_results[-1].stop` — Agno'da bunun için ayrı bir alan yok).
 
 ---
 
-## 3. Tekli Mod — `single_cv_workflow`
+## 3. Tekli Mod — `submit_cv` (bot.py)
 
-`cv_processing_workflow`'u bir adım olarak sarar (nested workflow-as-step), sonuna
-sadece tekli modda gereken nitel analiz adımını ekler:
+**KISS revizyonu (kullanıcı kararı):** başlangıç tasarımındaki sarmalayıcı
+`single_cv_workflow` kaldırıldı. Tekli mod, `submit_cv` tool'unun içinde iki düz
+çağrıdır — bu, Aşama 3'ün toplu deseniyle (**workflow + tek uzman ajan çağrısı**)
+birebir aynı şekildir, ekstra bir workflow katmanı hem gereksizdi hem iki modu
+farklılaştırıyordu:
 
 ```python
-single_cv_workflow = Workflow(steps=[
-    Step(name="process", workflow=cv_processing_workflow),
-    Step(name="analyze_cv", executor=analyze_cv_step),
-])
-
-def analyze_cv_step(step_input: StepInput) -> StepOutput:
-    profile = step_input.previous_step_content                       # CandidateProfile
-    criteria = json.loads(step_input.get_input_as_string())["criteria"]
-    rapor = analysis_agent.run(
-        f"Aday profili: {profile.model_dump_json()}\nKriterler: {criteria}"
-    )
-    return StepOutput(content=rapor.content)                          # SingleAnalysisResult
-
-
-def submit_cv(run_context, files):
+@tool(stop_after_tool_call=True)  # dönüş LLM'e geri gitmez, olduğu gibi kullanıcıya iletilir
+def submit_cv(run_context, criteria=None, files=None):
     if not files:
-        return "Bir PDF dosyası göndermelisin."
-    criteria = session_state["dynamic_criteria"]
+        return "Analiz için bir PDF dosyası göndermelisin."
+    if criteria:  # dosyayla aynı mesajda kriter yazıldıysa (tool_choice zorlanmışken tek şans)
+        run_context.session_state["dynamic_criteria"] = criteria
+    criteria = run_context.session_state.get("dynamic_criteria")
+    if not criteria:
+        return "Bu CV'yi hangi kriterlere göre değerlendirmemi istersin? ..."
 
-    if session_state["mode"] == "collecting_batch":
-        session_state["batch_files"].append(files[0])                 # HAM dosya, işlenmeden biriktirilir
-        if len(session_state["batch_files"]) == 5:
-            return finalize_batch(run_context)
-        return f"{len(session_state['batch_files'])}/5 CV alındı. Daha fazla gönder ya da /done yaz."
+    run = cv_processing_workflow.run(files=list(files))     # TEK paylaşılan tarif
+    if stopped_early(run):
+        return str(run.content)                             # validate_pdf'in hata mesajı, birebir
+    profile = run.content                                   # CandidateProfile (tipli)
+    if not isinstance(profile, CandidateProfile):
+        return f"CV işlenirken beklenmedik bir sorun oluştu: {profile}"
 
-    else:  # idle -> tekli analiz, HEMEN çalıştırılır
-        if not criteria:
-            return "Bu CV'yi hangi kriterlere göre değerlendirmemi istersin?"
-        sonuc = single_cv_workflow.run(input=json.dumps({"criteria": criteria}), files=files)
-        if sonuc.stopped:
-            return sonuc.content                                       # validate_pdf hatası
-        return sonuc.content.markdown_report
+    analiz = analysis_agent.run(f"Aday profili (JSON):\n{profile.model_dump_json()}\n\nKriterler: {', '.join(criteria)}")
+    return analiz.content.markdown_report                   # SingleAnalysisResult
 ```
+
+**Asenkronluk notu:** `submit_cv` bilinçli olarak **sync** — Agno, async agent run
+içindeki sync tool'ları `asyncio.to_thread` ile ayrı thread'e atar (kaynaktan
+doğrulandı), yani uzun süren workflow koşusu event loop'u ve diğer Telegram
+mesajlarını bloklamaz. Tool'u `async def` yapıp içinde sync `workflow.run()`
+çağırmak ise loop'u kilitlerdi — bu tuzağa düşülmedi.
 
 ---
 
@@ -172,30 +181,21 @@ biriktirir (bkz. §3). Tüm işleme (doğrulama + çıkarım + skorlama), `final
 çalıştıran bir `Parallel` bloğunda yapılır:
 
 ```python
-class ProcessAndScoreExecutor:
-    """Her paralel dal bu executor'ın bir örneği — kendi dosyasını closure'da taşır,
-    ama hepsi AYNI cv_processing_workflow nesnesini çağırır."""
+def make_process_and_score(file: File, criteria: list[str]):
+    """Her paralel dal için bir closure üretir (class değil — KISS). Dal kendi
+    dosyasını/kriterini taşır ama hepsi AYNI cv_processing_workflow nesnesini çağırır."""
 
-    def __init__(self, file: File, criteria: list[str]):
-        self.file = file
-        self.criteria = criteria
-
-    async def __call__(self, step_input: StepInput) -> StepOutput:
-        sonuc = await cv_processing_workflow.arun(files=[self.file])   # <-- tekli modla BİREBİR aynı çağrı
-        if sonuc.stopped:
-            return StepOutput(
-                content={"filename": self.file.filename, "error": sonuc.content},
-                success=False,
-            )
-        profile = sonuc.content                                        # CandidateProfile
+    async def process_and_score(step_input: StepInput) -> StepOutput:
+        sonuc = await cv_processing_workflow.arun(files=[file])   # <-- tekli modla BİREBİR aynı çağrı
+        if stopped_early(sonuc):
+            return StepOutput(content={"filename": file.filename, "error": str(sonuc.content)}, success=False)
+        profile = sonuc.content                                   # CandidateProfile
         skor = await scoring_agent.arun(
-            f"Aday profili: {profile.model_dump_json()}\nKriterler: {self.criteria}"
+            f"Aday profili: {profile.model_dump_json()}\nKriterler: {criteria}"
         )
-        return StepOutput(content={
-            "filename": self.file.filename,
-            "profile": profile,
-            "score": skor.content,
-        })
+        return StepOutput(content={"filename": file.filename, "profile": profile, "score": skor.content})
+
+    return process_and_score
 
 
 def finalize_batch(run_context):
@@ -206,7 +206,7 @@ def finalize_batch(run_context):
 
     criteria = session_state["dynamic_criteria"]
     branches = [
-        Step(name=f"candidate_{i}", executor=ProcessAndScoreExecutor(file, criteria))
+        Step(name=f"candidate_{i}", executor=make_process_and_score(file, criteria))
         for i, file in enumerate(session_state["batch_files"])
     ]
     batch_workflow = Workflow(steps=[
@@ -220,11 +220,11 @@ def finalize_batch(run_context):
     return sonuc.content   # BatchAnalysisResult (JSON, ödev şemasına birebir)
 ```
 
-**Bu tasarımın kilit noktası:** `ProcessAndScoreExecutor.__call__` içindeki
-`cv_processing_workflow.arun(files=[self.file])` satırı, `single_cv_workflow`'un
-`process` adımının yaptığı **birebir aynı çağrı**. Tekli/toplu arasındaki tek fark,
-kaç kez ve ne zaman (hemen mi, `finalize_batch`'te toplu mu) çağrıldığı — pipeline'ın
-kendisi değil.
+**Bu tasarımın kilit noktası:** `process_and_score` içindeki
+`cv_processing_workflow.arun(files=[file])` satırı, tekli modda `submit_cv`'nin
+yaptığı **birebir aynı çağrı**; ikisi de ardından tek bir uzman ajan (Analysis /
+Scoring) çağırır. Tekli/toplu arasındaki tek fark, kaç kez ve ne zaman (hemen mi,
+`finalize_batch`'te toplu mu) çağrıldığı — pipeline'ın kendisi değil.
 
 **Bilinen trade-off:** Doğrulama artık `finalize_batch`'e kadar ertelendiği için,
 5 CV'den biri bozuksa kullanıcı bunu ancak hepsini gönderip `/done` dedikten sonra
@@ -235,9 +235,12 @@ ediyoruz — bilinçli bir tercih, `ARCHITECTURE.md` §11'de kayıtlı.
 
 ## 5. Extraction Agent
 
-**Dosya:** `agents/extraction_agent.py`
+**Dosya:** `agents.py` (`extraction_agent`)
 **Rolü:** LLM Extraction — ham, dağınık CV metnini ortak `CandidateProfile` JSON
 şemasına normalize eder (ödevin "farklı formatları standartlaştırma" gereksinimi).
+**`send_media_to_model=False`:** workflow dosyaları her adıma taşıdığı için PDF
+baytlarının modele multimodal gitmesi bu bayrakla kapatıldı — girdisi yalnızca
+`validate_pdf_step`'in çıkardığı düz metin.
 **`output_schema`:** `CandidateProfile` (`full_name`, `skills`, `work_experience`,
 `languages`, `education`)
 **Instructions (özet):** *"Sana verilen ham CV metninden yalnızca açıkça belirtilmiş
@@ -248,7 +251,7 @@ kullanır.
 
 ## 6. Analysis Agent (tekli CV)
 
-**Dosya:** `agents/analysis_agent.py`
+**Dosya:** `agents.py` (`analysis_agent`)
 **Rolü:** Tek bir `CandidateProfile` + kullanıcının dinamik kriterlerini alıp nitel
 bir İK raporu üretir.
 **`output_schema`:** `SingleAnalysisResult` (`candidate_name`, `strengths`,
@@ -256,17 +259,18 @@ bir İK raporu üretir.
 **Instructions (özet):** *"Bir İK uzmanı gibi davran. Sadece verilen kriterlere göre
 değerlendir, kriter dışı özellikleri yorumlama. Güçlü/zayıf yönleri ve somut gelişim
 tavsiyelerini Türkçe, okunaklı bir Markdown raporu olarak üret."*
-**Çağrılma şekli:** `single_cv_workflow`'un `analyze_cv` adımı içinden. Sadece tekli
-modda kullanılır — toplu mod nitel rapor değil, skor üretir (bkz. Scoring Agent).
+**Çağrılma şekli:** `bot.submit_cv` içinden, `cv_processing_workflow` başarıyla
+bittikten hemen sonra. Sadece tekli modda kullanılır — toplu mod nitel rapor değil,
+skor üretir (bkz. Scoring Agent).
 
 ## 7. Scoring Agent (çoklu CV)
 
-**Dosya:** `agents/scoring_agent.py`
+**Dosya:** `agents.py` (`scoring_agent` — Aşama 3'te eklenecek)
 **Rolü:** Bir `CandidateProfile` + dinamik kriter listesini alıp **her kritere ayrı
 ayrı 0-100 arası puan** verir (ödevin `dynamicScores` alanı).
 **`output_schema`:** `CandidateScore` alt kümesi — `dynamicScores: dict[str, int]`,
 `hrEvaluation: str` (kısa gerekçe).
-**Çağrılma şekli:** `ProcessAndScoreExecutor` içinden, `cv_processing_workflow`
+**Çağrılma şekli:** `process_and_score` closure'ı içinden, `cv_processing_workflow`
 tamamlandıktan **hemen sonra**, aynı paralel dal içinde. Tüm dallar Agno'nun native
 `Parallel`'ı ile aynı anda çalışır — elle `asyncio.gather`/`Semaphore` yazılmıyor.
 **Sıralama:** `averageScore` `rank_top3_fn` içinde Python'da hesaplanır (LLM'e
@@ -276,7 +280,7 @@ bırakılmaz — aritmetik ortalama deterministik olmalı), ilk 3 aday `rank` il
 
 ## 8. Model Sağlayıcı Soyutlaması
 
-**Dosya:** `models/model_factory.py`
+**Dosya:** `model_factory.py`
 
 ```python
 def get_model():
@@ -297,9 +301,15 @@ tool-calling / structured-output destekleyen bir model olması gerekir (örn.
 ## 9. Session State Şeması (özet — detay `ARCHITECTURE.md` §4)
 
 ```python
+# Aşama 2 (mevcut): sadece kullanılan anahtar tanımlı — "kompleksite gerektikçe"
 {
-    "mode": "idle" | "collecting_batch",
     "dynamic_criteria": list[str] | None,
-    "batch_files": list[File],   # HAM, işlenmemiş dosyalar — extraction finalize_batch'e ertelenir
 }
+# Aşama 3'te eklenecek:
+#   "mode": "idle" | "collecting_batch",
+#   "batch_files": list[File],   # HAM dosyalar — extraction finalize_batch'e ertelenir
 ```
+
+Başlangıç değeri `Agent(session_state={...})` ile verilir; Agno yeni her session'a
+bunun deepcopy'sini atar, tool'ların `run_context.session_state` mutasyonlarını run
+sonunda SqliteDb'ye persist eder (öncelik: run parametresi > db > agent varsayılanı).

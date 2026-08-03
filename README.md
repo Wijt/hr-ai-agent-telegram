@@ -24,15 +24,14 @@ flowchart TB
     RA --> T3[submit_cv]
     RA --> T4[finalize_batch]
 
-    T3 -->|"idle: hemen"| SCW["single_cv_workflow<br/>process + analyze_cv"]
+    T3 -->|"idle: hemen"| CPW
     T3 -->|"batch: biriktir"| BUF[(session_state.batch_files)]
-    T4 --> PAR["Parallel: N × ProcessAndScoreExecutor<br/>her dal ayrı bir dosya işler"]
+    T4 --> PAR["Parallel: N × process_and_score<br/>her dal ayrı bir dosya işler"]
     BUF -.-> T4
 
-    SCW --> CPW
     PAR --> CPW["cv_processing_workflow — TEK paylaşılan tarif<br/>validate_pdf (stop=True kapısı) → extract_cv<br/>→ CandidateProfile"]
 
-    CPW --> AN["analyze_cv → AnalysisAgent"]
+    CPW --> AN["AnalysisAgent (submit_cv içinde, tekli mod)"]
     CPW --> SC["score → ScoringAgent (her dal)"]
 
     AN --> OUT1["Markdown rapor"]

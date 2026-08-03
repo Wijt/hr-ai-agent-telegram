@@ -41,17 +41,16 @@ flowchart TB
     A --> T2[start_batch_session]
     A --> T3[submit_cv]
     A --> T4[finalize_batch]
-    T3 -->|idle: hemen çalıştır| SW["single_cv_workflow<br/>(process adımı + analyze_cv)"]
+    T3 -->|idle: hemen çalıştırır| CPW["cv_processing_workflow<br/>(TEK paylaşılan tarif)"]
     T3 -->|batch: sadece biriktir| BUF[("session_state.batch_files")]
-    T4 -->|N dosya, paralel| PAR["Parallel: ProcessAndScoreExecutor x N"]
-    SW -->|process adımı sarar| CPW["cv_processing_workflow<br/>(TEK paylaşılan tarif)"]
+    T4 -->|N dosya, paralel| PAR["Parallel: process_and_score x N"]
     PAR -->|her dal aynı nesneyi çağırır| CPW
     CPW --> S1["validate_pdf (function, stop=True kapısı)"]
     S1 --> S2["extract_cv (Agent, output_schema=CandidateProfile)"]
-    SW --> S3["analyze_cv (function → AnalysisAgent)"]
+    T3 -->|workflow bitince, submit_cv içinde| S3["analysis_agent<br/>(output_schema=SingleAnalysisResult)"]
     PAR --> S4["her dal: ScoringAgent"]
     S4 --> S5["rank_top3 (function, deterministik ortalama)"]
-    A & SW & CPW & PAR --> DB[(SqliteDb<br/>session_state + history + workflow runs)]
+    A & CPW & PAR --> DB[(SqliteDb<br/>session_state + history + workflow runs)]
 ```
 
 **Katman sorumlulukları:**
@@ -137,23 +136,23 @@ ile kuruluyor, paralellik şart değil) bu sonuca çıkıyor; bkz. `AGENTS.md` �
 ```mermaid
 flowchart LR
     subgraph cv_processing_workflow["cv_processing_workflow (TEK tanım)"]
-        V["validate_pdf<br/>(function, PdfValidator sarmalar)"] -->|stop=True ise dur| E["extract_cv<br/>(Agent, output_schema=CandidateProfile)"]
+        V["validate_pdf<br/>(function, validate_pdf() çağırır)"] -->|stop=True ise dur| E["extract_cv<br/>(Agent, output_schema=CandidateProfile)"]
     end
-    subgraph single["single_cv_workflow (tekli mod)"]
+    subgraph single["tekli mod (submit_cv içi)"]
         direction LR
-        P1["process<br/>(= cv_processing_workflow)"] --> AN["analyze_cv<br/>(function → AnalysisAgent)"]
+        P1["cv_processing_workflow.run(files=...)"] --> AN["analysis_agent.run(profil + kriterler)"]
     end
     subgraph batch["finalize_batch (toplu mod)"]
         direction LR
-        PAR["Parallel: ProcessAndScoreExecutor x N<br/>(her dal içinde cv_processing_workflow.arun() + ScoringAgent)"] --> R["rank_top3<br/>(function, ortalama + sıralama)"]
+        PAR["Parallel: process_and_score x N<br/>(her dal içinde cv_processing_workflow.arun() + ScoringAgent)"] --> R["rank_top3<br/>(function, ortalama + sıralama)"]
     end
 ```
 
 | Parça | Adımlar | Ne zaman / nasıl çalışır | Çıktı |
 |---|---|---|---|
 | **`cv_processing_workflow`** | `validate_pdf` (function) → `extract_cv` (Agent) | Hem tekli hem toplu moddan **birebir aynı nesne** olarak çağrılır | `CandidateProfile` ya da doğrulama hatası (`stop=True` ile erken biter) |
-| **`single_cv_workflow`** | `Step(workflow=cv_processing_workflow)` → `analyze_cv` (function) | `submit_cv` içinde, **idle modda + kriter tanımlıysa**, **hemen** | `SingleAnalysisResult.markdown_report` |
-| **toplu (`finalize_batch`)** | `Parallel(ProcessAndScoreExecutor x N)` → `rank_top3` (function) | `finalize_batch` çağrıldığında; her dal **kendi içinde** `cv_processing_workflow.arun(files=[kendi_dosyası])` çağırır, sonra `ScoringAgent` | `BatchAnalysisResult` (ödev JSON şeması) |
+| **tekli mod (`submit_cv` içi)** | `cv_processing_workflow.run(files=...)` → `analysis_agent.run(...)` | `submit_cv` içinde, **idle modda + kriter tanımlıysa**, **hemen**. Ayrı bir sarmalayıcı workflow YOK (KISS revizyonu): tekli ve toplu mod birebir aynı deseni kullanır — workflow + tek uzman ajan çağrısı | `SingleAnalysisResult.markdown_report` |
+| **toplu (`finalize_batch`)** | `Parallel(process_and_score x N)` → `rank_top3` (function) | `finalize_batch` çağrıldığında; her dal **kendi içinde** `cv_processing_workflow.arun(files=[kendi_dosyası])` çağırır, sonra `ScoringAgent` | `BatchAnalysisResult` (ödev JSON şeması) |
 
 **Kritik tasarım kuralları:**
 
@@ -162,11 +161,11 @@ flowchart LR
    `finalize_batch` çağrıldığında, hepsi için aynı anda yapılır. Bilinen trade-off:
    erken hata geri bildirimi yok (5. CV bozuksa bunu ancak `/done` dedikten sonra
    öğrenirsiniz) — karşılığında tek, tutarlı bir pipeline. Bkz. §11.
-2. **Kriter nasıl taşınır:** Tekli modda `single_cv_workflow.run(input=json.dumps({"criteria":...}),
-   files=[...])` ile kriter `input` olarak geçilir, `analyze_cv` adımı
-   `step_input.get_input_as_string()` ile okur. Toplu modda kriter, her paralel dalın
-   kendi `ProcessAndScoreExecutor(file, criteria)` constructor'ına doğrudan verilir —
-   workflow `input`'una gerek yok çünkü her dal zaten kendi executor örneği.
+2. **Kriter nasıl taşınır:** Kriter workflow'a hiç girmez — `cv_processing_workflow`
+   yalnızca doğrula+çıkar yapar, kriterden habersizdir. Tekli modda `submit_cv`,
+   workflow bittikten sonra kriteri profille birlikte `analysis_agent`'ın prompt'una
+   yazar; toplu modda her paralel dalın closure'ı (`process_and_score`) kriteri
+   aynı şekilde `scoring_agent`'a geçirir.
 3. **Doğrulama kapısı:** `validate_pdf` adımı `PdfValidator`'ı (§9) çağıran bir
    function-executor. Geçersizse `StepOutput(content=hata_mesajı, stop=True)` döner —
    Agno'nun resmi "validation/quality gate" deseni; `cv_processing_workflow` o an
@@ -175,22 +174,23 @@ flowchart LR
    ile çalışan bir Agent step. Çıktısı çağırana **tipli Pydantic nesnesi** olarak
    döner (Agno bunu string'e çevirmiyor — resmi `structured-io-at-each-step-level`
    örneğiyle doğrulandı).
-5. **`ProcessAndScoreExecutor` — toplu modun kalbi:** Her paralel dal, kendi dosyasını
-   (`__init__`'te closure ile) taşıyan bir class-based executor. `__call__` içinde
-   **tekli modla birebir aynı** `cv_processing_workflow.arun(files=[self.file])`
-   çağrısını yapar, sonra `ScoringAgent`'ı çağırır. Agno'nun `Parallel`'ı bloktaki
-   tüm dalları **aynı anda** çalıştırır (§8).
+5. **`process_and_score` — toplu modun kalbi:** Her paralel dal, kendi dosyasını ve
+   kriterleri closure'da taşıyan bir **fonksiyon** (class değil — KISS): bir fabrika
+   fonksiyonu her dosya için `async def process_and_score(step_input)` üretir. İçinde
+   **tekli modla birebir aynı** `cv_processing_workflow.arun(files=[file])` çağrısı
+   yapılır, sonra `ScoringAgent` çağrılır. Agno'nun `Parallel`'ı bloktaki tüm dalları
+   **aynı anda** çalıştırır (§8).
 6. **`rank_top3`:** `Parallel` bloğunun tüm dal çıktıları toplu halde alınır,
    `averageScore` Python'da hesaplanır (LLM'e bırakılmaz), ilk 3 aday sıralanıp
    ödevin JSON şemasına dönüştürülür.
 
 ## 7. Veri Modelleri
 
-**`PdfValidationResult`** (§9'daki 6 kontrolün tipli çıktısı — LLM'siz):
+**`validate_pdf` dönüşü** (§9'daki 6 kontrolün çıktısı — LLM'siz). KISS revizyonu:
+ayrı bir sonuç sınıfı/enum yok, düz tuple:
 ```
-status: EMPTY_FILE | NOT_A_PDF | ENCRYPTED | CORRUPTED | EMPTY_PDF | NO_EXTRACTABLE_TEXT | VALID
-extracted_text: str | None     # sadece status == VALID iken dolu
-user_message: str | None       # sadece status != VALID iken dolu, Telegram'a birebir gönderilir
+(metin, hata) : tuple[str | None, str | None]   # tam olarak biri dolu
+# hata, Telegram'a birebir gönderilecek Türkçe kullanıcı mesajıdır
 ```
 
 **`CandidateProfile`** (LLM Extraction'ın ürettiği ortak şema — ödevin istediği
@@ -225,7 +225,7 @@ fallback olarak kullanılır.
 Kullanıcı kararı: elle `asyncio.Semaphore` yazmak yerine Agno'nun `Parallel` step'i
 kullanılıyor, eşzamanlılık sınırlanmıyor.
 
-- `finalize_batch`'teki `Parallel(ProcessAndScoreExecutor x N)`, N ≤ 5 olduğu için en
+- `finalize_batch`'teki `Parallel(process_and_score x N)`, N ≤ 5 olduğu için en
   fazla 5 eşzamanlı `cv_processing_workflow` çalıştırması yapar — standart OpenAI
   rate limitlerinin çok altında.
 - Tek bir CV'nin doğrulama/skorlama hatası diğerlerini etkilemez: her dal kendi
@@ -239,17 +239,17 @@ kullanılıyor, eşzamanlılık sınırlanmıyor.
 
 ## 9. PDF Doğrulama
 
-`cv_processing_workflow`'un **ilk adımı** olan `validate_pdf` (function-executor),
+`cv_processing_workflow`'un **ilk adımı** olan `validate_pdf_step` (function-executor),
 extraction'dan (dolayısıyla **her türlü LLM çağrısından**) **önce** çalışan,
-tamamen deterministik, LLM'siz bir `PdfValidator` servisini sarmalar. Amaç iki
+tamamen deterministik, LLM'siz `pdf_validator.validate_pdf()` fonksiyonunu çağırır. Amaç iki
 yönlü: (1) ödevin "hatalı format tespit ederse süreci kesip net hata mesajı
 dönmeli" gereksinimini karşılamak, (2) geçersiz dosyalar için gereksiz API çağrısı
 yapmamak. Hem tekli hem toplu modda **aynı şekilde** çalışır çünkü ikisi de aynı
 `cv_processing_workflow`'u kullanır.
 
-`PdfValidator.validate(content: bytes, filename: str) -> PdfValidationResult`,
+`validate_pdf(content: bytes) -> tuple[str | None, str | None]` (yani `(metin, hata)`),
 sırayla şu kontrolleri yapar — **ilk başarısız kontrolde durur**, sonrakiler
-çalışmaz:
+çalışmaz. Dosya adı parametre bile değil: uzantıya hiç güvenilmiyor (bkz. #2):
 
 | # | Kontrol | Nasıl | Durum kodu | Kullanıcıya dönen mesaj |
 |---|---|---|---|---|
@@ -260,19 +260,21 @@ sırayla şu kontrolleri yapar — **ilk başarısız kontrolde durur**, sonraki
 | 5 | Sayfasız | yapısal olarak geçerli ama `len(reader.pages) == 0` | `EMPTY_PDF` | "Bu PDF'in içinde hiç sayfa yok." |
 | 6 | Metin çıkarılamıyor | tüm sayfalardan `extract_text()` birleştirilir, toplam < 50 karakter | `NO_EXTRACTABLE_TEXT` | "Bu PDF'ten metin çıkaramadım (muhtemelen taranmış görüntü). Şu an yalnızca metin tabanlı PDF'leri işleyebiliyorum." |
 
-`validate_pdf` step'i, `PdfValidator`'ın sonucunu şuna çevirir:
-- Geçersiz → `StepOutput(content=sonuc.user_message, stop=True)` — Agno'nun resmi
+`validate_pdf_step`, `(metin, hata)` tuple'ını şuna çevirir:
+- Hata varsa → `StepOutput(content=hata, stop=True)` — Agno'nun resmi
   "validation gate" deseni; workflow burada durur, sonraki adımlar hiç çalışmaz.
-- Geçerli → `StepOutput(content=sonuc.extracted_text, stop=False)` — `extract_cv`
-  adımına girdi olur.
+  Dışarıdan tespit: Agno'da ayrı bir "erken durdu" alanı yok (status `completed`
+  kalır), `run_output.step_results[-1].stop` kontrol edilir (`workflows.stopped_early`).
+- Hata yoksa → `StepOutput(content=metin)` — `extract_cv` adımına girdi olur.
 
 `filename` uzantısına hiç güvenilmemesi bilinçli bir karar: kullanıcı `.jpg` bir
 dosyayı `cv.pdf` diye yeniden adlandırıp gönderebilir, magic-number kontrolü bunu
 yakalar.
 
-`PdfValidator`'ın kendisi LLM içermediği için `tests/test_pdf_validator.py` içinde
-**gerçek, elle hazırlanmış bozuk/şifreli/boş/sahte-uzantılı örnek dosyalarla** birim
-testi yazılacak — mock'a gerek yok, çünkü hiçbir dış çağrı (LLM, ağ) içermiyor.
+`validate_pdf` LLM içermediği için `tests/test_pdf_validator.py` içinde
+**gerçek, elle hazırlanmış bozuk/şifreli/boş/sahte-uzantılı örnek baytlarla** birim
+testi yazıldı (kontrol başına bir test) — mock yok, çünkü hiçbir dış çağrı (LLM, ağ)
+içermiyor.
 
 ## 10. Bilinen Riskler ve Açık Sorular
 
@@ -291,12 +293,17 @@ testi yazılacak — mock'a gerek yok, çünkü hiçbir dış çağrı (LLM, ağ
 > tool'a erişilebilir şekilde saklanır. Extraction tamamen bizim `pypdf` + Extraction
 > Agent zincirimiz üzerinden yürür.
 >
-> **Küçük, implementasyonda doğrulanacak detay:** `cv_processing_workflow.run(files=[...])`
-> çağrıldığında (`workflow.run(files=...)` — Agent/tool seviyesindeki `files` mekanizmasıyla
-> simetrik) ilk adıma (`validate_pdf`) dosyanın `step_input.files` üzerinden nasıl
-> ulaştığı resmi örnek kodla birebir gösterilmedi, ama `StepOutput`/`StepInput`
-> tiplerinin `files` alanı taşıdığı doğrulandı. Büyük bir risk değil, implementasyonun
-> ilk adımı (Aşama 2, bkz. §13) sırasında hemen netleşecek bir detay.
+> **Aşama 2'de doğrulandı (kurulu kaynak + canlı test):** `Workflow.run(files=[...])`
+> dosyaları her adımın `step_input.files`'ına taşıyor (`agno/workflow/workflow.py`:
+> `shared_files`), Telegram interface'i dosyayı indirip `File(content=bytes,
+> filename=...)` kuruyor (`agno/os/interfaces/telegram/helpers.py:85`). Bozuk baytla
+> yapılan gerçek workflow koşusunda pipeline 1. adımda durdu, LLM'e hiç gidilmedi.
+> Ek bulgular: dosyalar **her** adıma taşındığı için `extraction_agent`'a da
+> `send_media_to_model=False` verildi (PDF baytları modele multimodal gitmesin);
+> Telegram 20MB üzeri dosyayı hiç indirmiyor (`validate_pdf_step` boş `files`
+> durumunu ele alıyor); sync tool'lar Agno tarafından `asyncio.to_thread`'e
+> atıldığı için tool içindeki sync `workflow.run()` event loop'u bloklamıyor
+> (ödevin "asenkron süreç" kriteri — bot diğer mesajlara yanıt vermeye devam eder).
 
 ### 10.2 Açık — Yarım kalmış batch oturumu
 
@@ -310,7 +317,7 @@ işlemsizlikten sonra `collecting_batch`'i otomatik `idle`'a döndürmek.
 
 ### 10.3 Açık — Skorların kalibrasyonu
 
-Toplu modda her CV, **birbirinden habersiz, paralel** bir `ProcessAndScoreExecutor`
+Toplu modda her CV, **birbirinden habersiz, paralel** bir `process_and_score`
 dalıyla puanlanıyor (bkz. §6, §8). Bu, ödevin "paralel işleme" gereksinimini
 karşılıyor ama metodolojik bir zayıflık taşıyor: bir CV'ye verilen "85" puanı, başka
 bir paralel çağrıda üretilen "85" ile tam olarak aynı ölçekte olmayabilir (LLM'ler
@@ -339,27 +346,26 @@ aday bilgi bankası (`FilesystemContextProvider` — bkz. §13 Aşama 4).
 
 ## 12. Klasör Yapısı
 
+**KISS revizyonu (Aşama 2, kullanıcı kararı):** alt klasör/paket YOK — `src/` altında
+düz modüller. `__init__.py`, re-export, tek fonksiyonluk class, ayrı "domain/services"
+katmanları kaldırıldı. Python, çalıştırılan script'in dizinini otomatik `sys.path`'e
+ekler (`cd src && python main.py`); testler için `pytest.ini` → `pythonpath = src`.
+
 ```
 telegram-ai-hr-bot/
-├── ARCHITECTURE.md
-├── AGENTS.md
-├── README.md
+├── ARCHITECTURE.md / AGENTS.md / README.md / TODO.md
 ├── .env.example
 ├── requirements.txt
-├── src/                                # düz yapı, ayrı bir paket adı yok — çalıştırılan script'in
-│   │                                   # dizini Python'da otomatik sys.path'e girer, PYTHONPATH/editable
-│   │                                   # install gerekmez (`cd src && python main.py`)
-│   ├── main.py                        # AgentOS + Telegram interface bootstrap
-│   ├── config.py                      # env-tabanlı ayarlar
-│   ├── models/model_factory.py        # OpenAI/Ollama seçici
-│   ├── domain/                        # CandidateProfile, SingleAnalysisResult, BatchAnalysisResult, PdfValidationResult
-│   ├── services/                      # pdf_validator.py (validasyon + metin çıkarımı, LLM'siz)
-│   ├── agents/                        # router agent + tools (chat_agent.py), extraction/analysis/scoring agent'ları
-│   ├── workflows/
-│   │   ├── cv_processing_workflow.py  # TEK paylaşılan tarif (validate_pdf + extract_cv)
-│   │   ├── single_cv_workflow.py      # cv_processing_workflow'u sarar + analyze_cv
-│   │   └── batch_processing.py        # ProcessAndScoreExecutor, rank_top3_fn
-│   └── session/                       # session_state şeması + guard fonksiyonları
+├── pytest.ini              # pythonpath = src (conftest.py yerine)
+├── src/
+│   ├── main.py             # AgentOS + Telegram interface bootstrap
+│   ├── config.py           # env-tabanlı ayarlar
+│   ├── model_factory.py    # OpenAI/Ollama seçici
+│   ├── schemas.py          # LLM çıktı şemaları (Pydantic — Agno output_schema gereksinimi)
+│   ├── pdf_validator.py    # validate_pdf() → (metin, hata) — LLM'siz
+│   ├── agents.py           # extraction_agent, analysis_agent (Aşama 3'te: scoring_agent)
+│   ├── workflows.py        # cv_processing_workflow (Aşama 3'te: batch parçaları)
+│   └── bot.py              # Router Agent + tool'ları + pre_hook
 └── tests/
 ```
 
@@ -372,7 +378,7 @@ karşılığı. Her aşama, bir öncekinin çalıştığı doğrulanmadan başla
 |---|---|---|
 | **0 — Hello World** | Tek dosya, Agno `Agent` (tool'suz, en yalın hâliyle) + `Telegram` interface. Sadece BotFather token / webhook / (yerelde) ngrok bağlantısını uçtan uca doğrula. | Bota `/start` yaz, cevap gelsin. |
 | **1 — Sohbet + Session** | `SqliteDb` eklenir, konuşma geçmişi çalışır hâle gelir. | Botla önce ismini paylaş, birkaç mesaj sonra sorunca hatırlasın. |
-| **2 — Kriter + Tekli CV** | `set_dynamic_criteria`, `PdfValidator` (+ birim testleri), `cv_processing_workflow`, `single_cv_workflow`, `extraction_agent`, `analysis_agent`, `submit_cv` (idle dalı). | Gerçek bir CV PDF'i gönder, kriter söyle, Markdown rapor gelsin. Bozuk/şifreli/sahte-uzantılı PDF'te net hata mesajı gelsin. |
+| **2 — Kriter + Tekli CV** | `set_dynamic_criteria`, `validate_pdf` (+ birim testleri), `cv_processing_workflow`, `extraction_agent`, `analysis_agent`, `submit_cv` (idle dalı: workflow + analysis_agent). | Gerçek bir CV PDF'i gönder, kriter söyle, Markdown rapor gelsin. Bozuk/şifreli/sahte-uzantılı PDF'te net hata mesajı gelsin. |
 | **3 — Toplu CV + Paralel Skorlama** | `start_batch_session`, `submit_cv` (batch dalı — sadece biriktirme), `finalize_batch`, `ProcessAndScoreExecutor`, `scoring_agent`, `rank_top3`. `cv_processing_workflow` **değişmeden, aynen** yeniden kullanılır. | 2-5 CV gönder, `/done` yaz, ödev JSON formatında top-3 sonucu gelsin. |
 | **4 (opsiyonel) — Aday bilgi bankası** | `data/adaylar/<aday>/` klasör yapısı (`cv_processing_workflow`'a üçüncü bir adım olarak eklenir) + `FilesystemContextProvider` ile Router'ın geçmiş adaylar hakkında soru cevaplayabilmesi. Ödevin 4 çekirdek gereksinimine dahil değil. | Daha önce işlenmiş bir aday hakkında soru sor, doğru cevap gelsin. |
 | **5 (opsiyonel) — Ollama, Docker** | `MODEL_PROVIDER=ollama` ile canlı test, Dockerfile/docker-compose. | Aynı senaryolar (Aşama 2-3) yerel Ollama modeliyle tekrar çalışır. |

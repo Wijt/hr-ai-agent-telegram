@@ -12,14 +12,28 @@ yazıldı. **Yeni oturum kod yazmaya başlamadan önce sırasıyla şunları oku
 Aşağıdakiler bu üç dosyada **olmayan**, sadece bu oturumda öğrenilen/kurulan/
 tartışılan ama henüz kalıcı hale getirilmemiş bilgiler.
 
-## 1. Şu anki durum (son commit: `da942e0`)
+## 1. Şu anki durum
 
-- **Aşama 0 — Hello World: ✅ tamamlandı ve gerçek Telegram botuyla doğrulandı.**
-- **Aşama 1 — Sohbet + session (SqliteDb): ✅ tamamlandı**, henüz kullanıcı
-  tarafından "adımı hatırlıyor mu" testi teyit edilmedi (son mesajımda test
-  istendi, cevap bekleniyor).
-- Aşama 2 (dinamik kriter + tekli CV) ve sonrası **henüz kod olarak yazılmadı** —
-  sadece `ARCHITECTURE.md`/`AGENTS.md`'de tasarlandı.
+- **Aşama 0 — Hello World: ✅** gerçek Telegram botuyla doğrulandı.
+- **Aşama 1 — Sohbet + session (SqliteDb): ✅** ("adımı hatırlıyor mu" testi
+  kullanıcı tarafından hâlâ teyit edilmedi).
+- **Aşama 2 — Dinamik kriter + tekli CV: ✅ kod tamam**, birim testler geçiyor
+  (7/7), doğrulama kapısı gerçek workflow koşusuyla test edildi (bozuk dosya →
+  LLM'e gitmeden hata mesajı). **Kullanıcının gerçek Telegram + gerçek CV testi
+  bekleniyor** (başarı kriteri: kriter yaz → PDF gönder → Markdown rapor).
+- Aşama 3 (toplu CV + paralel skorlama) henüz yazılmadı.
+
+## 1a. ⚠️ KULLANICI KOD STİLİ TALİMATI — önce bunu oku
+
+Kullanıcı bu oturumda kod stiline sert müdahale etti, sonraki oturumlar aynı hatayı
+tekrarlamasın: **radikal KISS istiyor.** Tek fonksiyonluk class yazma (PdfValidator
+class'ı silindi → `validate_pdf()` fonksiyonu), sonuç nesnesi/enum kurma (dönüş düz
+`(metin, hata)` tuple), `__init__.py`/paket iç içeliği yok (`domain/`, `services/`,
+`models/` klasörleri silindi → `src/` altında düz modüller), `conftest.py` yerine
+`pytest.ini`, test dosyaları minimal (senaryo başına 1 kısa test). Hata akışı: tool
+düz string döndürür, kullanıcıya iletmek agent'ın/framework'ün işi — ekstra makine
+kurma. Aşama 3'te de geçerli: `ProcessAndScoreExecutor` **class'ı yerine**
+`make_process_and_score(file, criteria)` closure fabrikası (AGENTS.md §4 güncellendi).
 
 ## 2. Kaynaklar
 
@@ -143,57 +157,52 @@ okunabilir).
 - **`visualize` (diyagram) aracı** mimari diyagramı çizmek için kullanıldı,
   README.md'deki Mermaid diyagramı onun GitHub'da render olan eşdeğeri.
 
-## 7. Sıradaki adımlar — Aşama 2 (dinamik kriter + tekli CV analizi)
+## 7. Aşama 2 — ✅ TAMAMLANDI (bu oturumda)
 
-`ARCHITECTURE.md` §6, §9, `AGENTS.md` §2, §4, §5'in doğrudan kod karşılığı.
+Uygulanan yapı (KISS revizyonlu, bkz. §1a): `src/schemas.py` (CandidateProfile,
+SingleAnalysisResult), `src/pdf_validator.py` (`validate_pdf() → (metin, hata)`),
+`src/agents.py` (extraction + analysis), `src/workflows.py` (cv_processing_workflow
++ `stopped_early()`), `src/bot.py` (Router: `set_dynamic_criteria`, `submit_cv`,
+`force_submit_cv_on_file` pre_hook'u), `main.py` (AgentOS'a workflow da kayıtlı).
+`tests/test_pdf_validator.py` 7/7 geçiyor.
 
-- [ ] `requirements.txt`'e `pypdf` ekle
-- [ ] `domain/`: `CandidateProfile`, `SingleAnalysisResult`, `PdfValidationResult`
-      (Pydantic modelleri, `ARCHITECTURE.md` §7'deki alan adlarıyla birebir)
-- [ ] `services/pdf_validator.py`: `PdfValidator.validate()` — 6 kontrol sırayla
-      (`ARCHITECTURE.md` §9 tablosu). **LLM içermez.**
-- [ ] `tests/test_pdf_validator.py`: gerçek, elle hazırlanmış bozuk/şifreli/boş/
-      sahte-uzantılı örnek dosyalarla — mock yok (dış çağrı olmadığı için gerek
-      yok). **Bu fixture dosyalar henüz yok, testle birlikte üretilmeli** (örn.
-      `pypdf` ile şifreli bir PDF oluşturmak, geçerli bir PDF'in son N baytını
-      kesip bozuk hâle getirmek, 0 baytlık dosya, `.txt` içeriğini `.pdf` diye
-      kaydetmek).
-- [ ] `agents/extraction_agent.py`: `output_schema=CandidateProfile`
-- [ ] `agents/analysis_agent.py`: `output_schema=SingleAnalysisResult`
-- [ ] `workflows/cv_processing_workflow.py`: `validate_pdf` (function,
-      `StepOutput(stop=True)` kapısı) → `extract_cv` (Agent step) — **tek,
-      paylaşılan tarif**, Aşama 3'te de değişmeden reuse edilecek
-- [ ] `workflows/single_cv_workflow.py`: `cv_processing_workflow`'u iç adım
-      olarak sarar (`Step(workflow=cv_processing_workflow)`) + `analyze_cv`
-      (function-executor, kriter + profili birleştirip `analysis_agent`'ı çağırır)
-- [ ] `session/`: `session_state` şeması (`mode`, `dynamic_criteria`,
-      `batch_files`) + guard yardımcıları
-- [ ] `agents/chat_agent.py`: Router Agent'a tool'lar eklenir —
-      `set_dynamic_criteria`, `submit_cv` (şimdilik sadece idle dalı: kriter
-      varsa `single_cv_workflow`'u hemen çalıştırır). **`pre_hook` ile** o turda
-      dosya varsa `tool_choice="submit_cv"` zorunlu kılınmalı (`ARCHITECTURE.md`
-      §5) — bu, LLM'in dosya geldiğinde tool çağırmayı "unutmasını" imkansız
-      kılan kritik bir güvence, atlanmamalı.
-      `send_media_to_model=False, store_media=True` ayarları da bu adımda gelir.
+**Tasarım değişiklikleri (orijinal plana göre — hepsi dokümanlara işlendi):**
+- `single_cv_workflow` YOK: `submit_cv` doğrudan `cv_processing_workflow.run()` +
+  `analysis_agent.run()` çağırıyor — Aşama 3'ün batch deseniyle birebir aynı şekil.
+- `session/` modülü YOK: state `run_context.session_state`'te, başlangıç değeri
+  `Agent(session_state={"dynamic_criteria": None})`.
+- `submit_cv`'ye `criteria` parametresi eklendi: kullanıcı dosya + kriteri AYNI
+  mesajda gönderirse (tool_choice zorlanmışken set_dynamic_criteria çağrılamaz)
+  kriter kaybolmasın.
+- Agno 2.8.6 gerçekleri: `pre_hooks` (liste; `pre_hook` yok), `tool_choice`
+  mutasyonu Agent'ta kalıcı (her turda set/reset), erken durma tespiti
+  `step_results[-1].stop` (ayrı alan yok), `submit_cv` `stop_after_tool_call=True`
+  (sonsuz zorlama döngüsü koruması + rapor kullanıcıya birebir gider), sync tool
+  → Agno `asyncio.to_thread`'e atar (event loop bloklanmaz).
 
-**Başarı kriteri:** Gerçek bir CV PDF'i gönder, kriter söyle (örn. "React
-tecrübesi ve temiz koda göre skorla"), Markdown rapor gelsin. Bozuk/şifreli/
-sahte-uzantılı bir PDF gönderildiğinde net, anlaşılır bir hata mesajı gelsin —
-hiçbir OpenAI çağrısı yapılmadan.
+**Kullanıcının canlı testi bekleniyor:** kriter yaz → CV PDF'i gönder → Markdown
+rapor; bozuk/şifreli/sahte-uzantılı dosyada LLM'siz net hata mesajı.
 
-## 8. Ondan sonrası — Aşama 3 (toplu CV + paralel skorlama)
+## 7a. Sıradaki adımlar — Aşama 3 (toplu CV + paralel skorlama)
 
-- [ ] `agents/scoring_agent.py`: `output_schema` ile `dynamicScores: dict[str,int]`
-      (`Field(ge=0, le=100)`), `hrEvaluation: str`
-- [ ] `domain/`: `CandidateScore`, `BatchAnalysisResult` — ödev dokümanındaki
-      JSON şemasına **birebir** (camelCase alan adları)
-- [ ] `workflows/batch_processing.py`: `ProcessAndScoreExecutor` (class-based,
-      her paralel dal kendi dosyasını + kriterleri constructor'da taşır,
-      `__call__` içinde **aynı** `cv_processing_workflow.arun(files=[self.file])`
-      + `scoring_agent.arun(...)` çağrılır), `rank_top3_fn` (ortalama +
-      sıralama, **LLM'siz, deterministik**)
-- [ ] Router Agent'a `start_batch_session`, `finalize_batch` tool'ları +
-      `submit_cv`'nin batch dalı (bu moddayken dosyayı **işlemeden** biriktirir)
+Mevcut düz dosyalara eklenir, yeni klasör/class AÇILMAZ (bkz. §1a):
+
+- [ ] `schemas.py`'ye: `CandidateScore`, `BatchAnalysisResult` — ödev dokümanındaki
+      JSON şemasına **birebir** (camelCase alan adları, `dynamicScores`
+      `Field(ge=0, le=100)`)
+- [ ] `agents.py`'ye: `scoring_agent` (`output_schema` ile `dynamicScores` +
+      `hrEvaluation`)
+- [ ] `workflows.py`'ye: `make_process_and_score(file, criteria)` closure fabrikası
+      (class DEĞİL — içinde **aynı** `cv_processing_workflow.arun(files=[file])` +
+      `scoring_agent.arun(...)`), `rank_top3` (ortalama + sıralama, **LLM'siz**)
+- [ ] `bot.py`'ye: `start_batch_session`, `finalize_batch` tool'ları +
+      `submit_cv`'nin batch dalı (bu moddayken dosyayı **işlemeden** biriktirir) +
+      `session_state`'e `mode`/`batch_files` anahtarları
+- [ ] Dikkat: `finalize_batch` sync tool olarak yazılacaksa içindeki paralel dallar
+      async (`arun`) — sync tool zaten thread'e atıldığı için içeride
+      `asyncio.run(batch_workflow.arun(...))` gerekebilir; yazmadan önce Agno'nun
+      `Parallel`'ının sync `run()` yolunda da dalları eşzamanlı koşturup
+      koşturmadığını kurulu kaynaktan doğrula (bilinmiyor, varsayma!)
 
 **Başarı kriteri:** 2-5 CV gönder, `/done` yaz, ödev dokümanındaki JSON
 formatında top-3 sonucu gelsin.
