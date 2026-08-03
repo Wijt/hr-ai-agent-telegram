@@ -346,7 +346,9 @@ telegram-ai-hr-bot/
 ├── README.md
 ├── .env.example
 ├── requirements.txt
-├── src/hrbot/
+├── src/                                # düz yapı, ayrı bir paket adı yok — çalıştırılan script'in
+│   │                                   # dizini Python'da otomatik sys.path'e girer, PYTHONPATH/editable
+│   │                                   # install gerekmez (`cd src && python main.py`)
 │   ├── main.py                        # AgentOS + Telegram interface bootstrap
 │   ├── config.py                      # env-tabanlı ayarlar
 │   ├── models/model_factory.py        # OpenAI/Ollama seçici

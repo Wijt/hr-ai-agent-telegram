@@ -1,4 +1,4 @@
-from hrbot.config import settings
+from config import settings
 
 
 def get_model():
