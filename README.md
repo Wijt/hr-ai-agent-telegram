@@ -9,7 +9,7 @@ Yapay zeka destekli, dinamik kriterlere dayalı Telegram İK ve sohbet botu.
 ## Durum
 
 - [x] Proje deposu oluşturuldu
-- [ ] Mimari kararlar dokümante edildi
+- [x] Mimari kararlar dokümante edildi
 - [ ] Uygulama iskeleti
 - [ ] Genel sohbet modu
 - [ ] Tekli CV analizi (LLM Extraction + nitel rapor)
