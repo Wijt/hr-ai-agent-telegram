@@ -60,7 +60,10 @@ CV pipeline'ı** modeli:
 **Dosya:** `agents/chat_agent.py`
 **Bağlı olduğu arayüz:** Agno `Telegram` interface (`AgentOS(interfaces=[Telegram(agent=router_agent)])`)
 **Model:** `model_factory.get_model()` (varsayılan OpenAI, env ile Ollama'ya geçer)
-**db:** `SqliteDb` — session/history + `session_state` kalıcılığı
+**db:** kendi `db`'si yok — `AgentOS(db=SqliteDb(...))` seviyesinde tanımlanır ve
+kendi db'si olmayan her agent/team/workflow'a otomatik atanır (bkz.
+`ARCHITECTURE.md` §2). Aşama 2-3'te eklenecek diğer bileşenler aynı dosyayı tek
+tanımdan paylaşır — her birine ayrı ayrı `db=` yazmaya gerek yok.
 **Diğer ayarlar:** `send_media_to_model=False`, `store_media=True` — PDF ham içeriği
 LLM'e gönderilmez, sadece tool erişimi için saklanır (bkz. `ARCHITECTURE.md` §10.1).
 **`pre_hook`:** o turda ekli dosya (`files`) varsa `tool_choice="submit_cv"` olarak

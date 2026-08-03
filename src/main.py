@@ -12,13 +12,16 @@ agent = Agent(
     model=get_model(),
     instructions="Sen samimi, kısa ve bağlamı koruyan bir Türkçe sohbet asistanısın.",
     markdown=True,
-    db=SqliteDb(db_file="data/agent.db"),
     add_history_to_context=True,
 )
 
+# db AgentOS seviyesinde: kendi db'si olmayan her agent/team/workflow'a otomatik
+# atanır (agno/os/app.py) — Aşama 2-3'te eklenecek diğer bileşenler de aynı dosyayı
+# tek tanımdan paylaşacak (ARCHITECTURE.md §2).
 agent_os = AgentOS(
     agents=[agent],
     interfaces=[Telegram(agent=agent, token=settings.telegram_token)],
+    db=SqliteDb(db_file="data/agent-os.db"),
 )
 app = agent_os.get_app()
 
