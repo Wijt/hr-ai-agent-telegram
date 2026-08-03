@@ -21,4 +21,7 @@ agent_os = AgentOS(
 app = agent_os.get_app()
 
 if __name__ == "__main__":
-    agent_os.serve(app="hrbot.main:app", reload=True)
+    # host="0.0.0.0" şart: varsayılan "localhost" sadece bu makineden gelen
+    # bağlantıları kabul eder, Tailscale/Headscale üzerinden gelen socat relay'i
+    # dışarıdan sayılır ve reddedilir.
+    agent_os.serve(app="hrbot.main:app", host="0.0.0.0", port=7777, reload=True)
