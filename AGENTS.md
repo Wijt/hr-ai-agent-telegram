@@ -24,6 +24,11 @@ Tek bir "her şeyi yapan" ajan yerine, **bir router + üç uzman ajan** modeli:
 **Bağlı olduğu arayüz:** Agno `Telegram` interface (`AgentOS(interfaces=[Telegram(agent=router_agent)])`)
 **Model:** `model_factory.get_model()` (varsayılan OpenAI, env ile Ollama'ya geçer)
 **db:** `SqliteDb` — session/history + `session_state` kalıcılığı
+**Diğer ayarlar:** `send_media_to_model=False`, `store_media=True` — PDF ham içeriği
+LLM'e gönderilmez, sadece tool erişimi için saklanır (bkz. `ARCHITECTURE.md` §9.1).
+**`pre_hook`:** o turda ekli dosya (`files`) varsa `tool_choice="submit_cv"` olarak
+sabitlenir — dosya geldiğinde `submit_cv`'nin çağrılması LLM kararına değil koda
+bağlıdır (bkz. `ARCHITECTURE.md` §5).
 
 **Instructions (özet, Türkçe):**
 - Varsayılan davranış: samimi, kısa, bağlamı koruyan bir sohbet asistanı gibi yanıt ver.
@@ -43,7 +48,7 @@ Tek bir "her şeyi yapan" ajan yerine, **bir router + üç uzman ajan** modeli:
 |---|---|---|
 | `set_dynamic_criteria` | `(run_context, criteria: list[str]) -> str` | Kullanıcının serbest metnini LLM zaten tool-call argümanı olarak listeye çevirir; `session_state["dynamic_criteria"]` güncellenir. |
 | `start_batch_session` | `(run_context) -> str` | `session_state["mode"] = "collecting_batch"`, `batch_cvs = []`. Kriter tanımlı değilse kullanıcıyı önce kritere yönlendirir. |
-| `submit_cv` | `(run_context) -> str` | Bkz. §2. Mod'a göre tekli ya da batch'e ekleme davranışı. |
+| `submit_cv` | `(run_context, files: Optional[Sequence[File]] = None) -> str` | Bkz. §2. Mod'a göre tekli ya da batch'e ekleme davranışı. `pre_hook` sayesinde dosya varken çağrılması garanti. |
 | `finalize_batch` | `(run_context) -> str` | Bkz. §4. Toplanan CV'leri skorlar, JSON döner, mode'u `idle`'a çeker. |
 
 **Kullanılmayan/gerek olmayan tool'lar:** `reset` — Agno'nun native `/new` komutu
@@ -57,10 +62,12 @@ Bu, Router'ın en kritik tool'u; LLM sadece *"bir CV geldi, bunu çağır"* kara
 verir, gerisi tamamen Python:
 
 ```
-submit_cv(run_context):
-    dosya = run_context'ten o turun ekli dosyası  # ⚠ bkz. ARCHITECTURE.md §9 (spike gerekli)
-    if dosya yok:
+submit_cv(run_context, files):
+    # files: Agno tarafından otomatik enjekte edilir (built-in tool parametresi)
+    # pre_hook zaten dosya varken bu tool'un çağrılmasını garanti ediyor
+    if not files:
         return "Bir PDF dosyası göndermelisin."
+    dosya = files[0]
 
     validasyon = PdfValidator.validate(dosya)      # services/pdf_validator.py
     if validasyon başarısız:

@@ -19,7 +19,7 @@ Bot iki modda çalışır:
 |---|---|---|
 | Dil | Python 3.11+ | Agno framework'ü Python-native; ödevin izin verdiği 3 dilden biri. |
 | Agent framework | **Agno** | `output_schema` ile yapılandırılmış çıktı, model-sağlayıcı soyutlaması, hazır Telegram interface'i. (LangChain ile karşılaştırma sohbet geçmişinde yapıldı.) |
-| Telegram bağlantısı | **Agno `AgentOS` + `Telegram` interface** | Kullanıcı tercihi: hazır webhook/session altyapısını kullanmak. Bkz. §7 "Bilinen Riskler" — bu seçimin bilinen bir sınırlaması var ve B Planı dokümante edilmiştir. |
+| Telegram bağlantısı | **Agno `AgentOS` + `Telegram` interface** | Kullanıcı tercihi: hazır webhook/session altyapısını kullanmak. Dosya erişimi riski doğrulanıp çözüldü (bkz. §9). |
 | LLM sağlayıcı | **OpenAI (başlangıç) → Ollama (sonra)** | Geliştirme hızı için önce OpenAI; `MODEL_PROVIDER` env değişkeniyle tek satır değişiklikle Ollama'ya geçilecek şekilde soyutlanacak. |
 | Veritabanı | **SQLite** (`agno.db.sqlite.SqliteDb`) | Sıfır altyapı, yerel geliştirme için yeterli; session/memory zaten Agno tarafından bu üzerinden yönetiliyor. |
 | PDF işleme | `pypdf` | Bozuk/şifreli PDF tespiti (`PdfReadError`) + metin çıkarımı için yeterli ve framework'ten bağımsız. |
@@ -105,8 +105,14 @@ istemiyoruz. Bu yüzden:
   kullanıcıya açıklayıcı bir mesajla reddeder — LLM yanlış tool çağırsa bile sistem
   tutarsız bir duruma düşmez.
 - `submit_cv` tool'unun imzasında dosya içeriği LLM'e argüman olarak yazdırılmaz;
-  `RunContext` üzerinden o turun ekli medyasına erişilir (bkz. §7, doğrulanması
-  gereken varsayım).
+  Agno'nun `files: Optional[Sequence[File]]` built-in tool parametresi ile o turun
+  ekli medyası otomatik enjekte edilir (bkz. §9, doğrulandı).
+- Router Agent'a bir **`pre_hook`** eklenir: o turda ekli dosya varsa `tool_choice`'u
+  `submit_cv`'ye sabitler. Böylece "kullanıcı PDF gönderdiğinde `submit_cv`'yi çağır"
+  artık LLM'in inisiyatifine bırakılan bir talimat değil, kod seviyesinde garanti
+  edilen bir davranış — tek kalan LLM-bağımlı yönlendirme (metin bazlı kriter/batch
+  komutları) kasıtlı olarak LLM'e bırakılmıştır çünkü onlar doğal dil serbestliği
+  gerektiriyor (ödevin "serbest metin kriter" gereksinimi).
 
 ## 6. Veri Modelleri
 
@@ -154,23 +160,43 @@ dynamicScores/averageScore/hrEvaluation`) — camelCase, ödev örneğine sadık
 
 ## 9. Bilinen Riskler ve Açık Sorular
 
-Bu proje "önce dokümantasyon, sonra implementasyon" prensibiyle ilerliyor; aşağıdaki
-madde **implementasyona başlarken ilk doğrulanacak (spike) konu**:
+### 9.1 ÇÖZÜLDÜ — Dosya erişimi
 
-> **Risk:** Agno'nun resmi Telegram interface dokümantasyonu, bir dosya (PDF) Telegram
-> üzerinden geldiğinde bunun agent'a *"file input"* olarak aktarıldığını söylüyor,
-> ancak bir tool'un bu ham dosya baytlarına `RunContext` üzerinden nasıl erişeceği
-> **dokümante edilmemiş**. Bu, `submit_cv` tool'unun temel varsayımı.
+> Önceki risk: bir tool'un Telegram'dan gelen PDF'in ham baytlarına nasıl erişeceği
+> dokümante değildi. **Agno'nun resmi dokümantasyonu ve örnek kodları (`file_input_for_tool`,
+> `media_input_for_tool`) üzerinden doğrulandı:** Agno, `images`/`videos`/`audios`/`files`
+> parametrelerini "tool built-in parameters" olarak tanımlıyor ve o turun ekli medyasını
+> otomatik enjekte ediyor. Yani `submit_cv(run_context, files: Optional[Sequence[File]] = None)`
+> imzası yeterli — Telegram interface, gelen `Document`'ı otomatik olarak `File` tipine
+> çevirip (`agent-os/interfaces/telegram/reference` — Media Support tablosu, maks. 20 MB)
+> bu parametreye taşıyor. Spike'a gerek kalmadı, doğrudan bu şekilde implemente edilecek.
 >
-> **Doğrulama planı:** İlk implementasyon adımı, tek bir PDF gönderip `RunContext`
-> içeriğini loglayan minimal bir spike olacak.
->
-> **B Planı:** Eğer dosya erişimi güvenilir/dokümante edilmemiş şekilde çalışmazsa,
-> transport katmanı `python-telegram-bot`'a taşınır (Agno yalnızca agent/LLM katmanında
-> kalır). Bu senaryo daha önce değerlendirilmiş ve mimari olarak izole edildiği için
-> geçiş maliyeti sınırlı olacak şekilde tasarlandı (Router Agent'ın tool'ları servis
-> katmanına ince bir arayüzle bağlı; transport değişse de `services/` ve `agents/`
-> içindeki kod değişmeden kalır).
+> **Ek karar:** Router Agent `send_media_to_model=False, store_media=True` ile
+> yapılandırılacak — PDF'in ham baytları LLM'e (multimodal olarak) gönderilmez, sadece
+> tool'a erişilebilir şekilde saklanır. Extraction tamamen bizim `pypdf` + Extraction
+> Agent zincirimiz üzerinden yürür; modelin PDF'i "kendi başına okumaya" çalışıp tutarsız
+> sonuç üretmesi engellenmiş olur.
+
+### 9.2 Açık — Yarım kalmış batch oturumu
+
+Kullanıcı `/batch_analyze` ile toplama moduna girip 5'ten az CV gönderip `/done`
+yazmadan sohbeti bırakırsa, `session_state["mode"]` süresiz `collecting_batch`'te
+kalır. v1'de bunu kabul edilebilir görüyoruz (kullanıcı `/new` ile sıfırlayabilir)
+ama gerçek bir kusur: bir sonraki oturumda kullanıcı normal sohbet bekliyorken botun
+"CV bekliyorum" moduna takılı kalması olası. **v1 kapsamına almadığımız ama not
+düşülen iyileştirme:** oturum başına son aktivite zaman damgası tutup N dakika
+işlemsizlikten sonra `collecting_batch`'i otomatik `idle`'a döndürmek.
+
+### 9.3 Açık — Skorların kalibrasyonu
+
+`finalize_batch`, her CV'yi **birbirinden habersiz, paralel** bir Scoring Agent
+çağrısıyla puanlıyor (bkz. §7). Bu, ödevin "paralel işleme" gereksinimini karşılıyor
+ama metodolojik bir zayıflık taşıyor: bir CV'ye verilen "85" puanı, başka bir paralel
+çağrıda üretilen "85" ile tam olarak aynı ölçekte olmayabilir (LLM'ler bağımsız
+çağrılarda hafif tutarsız kalibrasyon yapabilir). v1'de bunu kabul ediyoruz çünkü
+alternatifi (tüm CV'leri tek bir çağırıda birlikte skorlamak) paralelliği ortadan
+kaldırır ve ödevin "asenkron/paralel işleme" değerlendirme kriteriyle çelişir. Mülakat
+savunmasında bu trade-off açıkça belirtilecek.
 
 ## 10. v1 Kapsamı
 
