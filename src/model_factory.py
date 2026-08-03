@@ -11,6 +11,9 @@ def get_model():
 
         return Ollama(id=settings.ollama_model_id, host=settings.ollama_base_url)
 
-    from agno.models.openai import OpenAIChat
+    # Responses API (Chat Completions değil): gpt-5.x reasoning modelleri function
+    # tool'ları Chat Completions'ta reddediyor ("use /v1/responses" 400 hatası).
+    # Agno'nun resmi örnekleri de gpt-5.x için OpenAIResponses kullanıyor.
+    from agno.models.openai import OpenAIResponses
 
-    return OpenAIChat(id=settings.openai_model_id)
+    return OpenAIResponses(id=settings.openai_model_id)

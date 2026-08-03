@@ -135,6 +135,14 @@ okunabilir).
   çıktısı, bir sonraki adımın `step_input.previous_step_content`'inde doğrudan
   `CandidateProfile` örneği olarak gelir (resmi `structured-io-at-each-step-level`
   örneğiyle doğrulandı).
+- **gpt-5.x reasoning modelleri + function tool'lar = Responses API zorunlu.**
+  `OpenAIChat` (Chat Completions) `gpt-5.6-luna` ile 400 döndürdü ("Function tools
+  with reasoning_effort are not supported... use /v1/responses"). Çözüm:
+  `model_factory` `OpenAIResponses` kullanıyor; `tool_choice` biçimi de farklı —
+  Responses'ta `{"type": "function", "name": "..."}` (Chat'teki `{"function":
+  {...}}` sarmalayıcısı YOK). Her ikisi de kullanıcının gerçek modeliyle canlı
+  doğrulandı. Ders: model katmanını da gerçek `.env` modeline karşı test etmeden
+  "bitti" deme.
 - **Tool'lara medya (`files`), `files: Optional[Sequence[File]] = None` gibi bir
   built-in parametre ile otomatik enjekte edilir** — LLM'in dosya içeriğini
   argüman olarak "yazdırmasına" gerek yok (`agno/tools/overview` — built-in

@@ -78,8 +78,9 @@ def force_submit_cv_on_file(run_input: RunInput, agent: Agent) -> None:
     ya da geri alınır. submit_cv'deki stop_after_tool_call=True, zorlanan tool'un
     aynı run içinde tekrar tekrar çağrılmasını (sonsuz döngü) engeller.
     """
+    # Responses API biçimi (Chat Completions'taki {"function": {...}} sarmalayıcısı yok)
     agent.tool_choice = (
-        {"type": "function", "function": {"name": "submit_cv"}} if run_input.files else None
+        {"type": "function", "name": "submit_cv"} if run_input.files else None
     )
 
 
