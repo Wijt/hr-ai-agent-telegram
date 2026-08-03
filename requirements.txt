@@ -4,3 +4,9 @@ openai
 python-dotenv
 uvicorn
 sqlalchemy
+
+# Aşama 2: PDF doğrulama + metin çıkarımı (ARCHITECTURE.md §9)
+pypdf
+
+# Test (ARCHITECTURE.md §11 — birim testleri)
+pytest
