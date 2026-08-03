@@ -5,6 +5,9 @@ Yapay zeka destekli, dinamik kriterlere dayalı Telegram İK ve sohbet botu.
 > Bu proje aktif geliştirme aşamasındadır. Mimari kararlar ve gerekçeleri için
 > [ARCHITECTURE.md](./ARCHITECTURE.md) ve ajan tasarımı için [AGENTS.md](./AGENTS.md)
 > dosyalarına bakınız. Çalışma ilkeleri (KISS, aşamalı geliştirme) `AGENTS.md` §0'da.
+>
+> **Yeni bir oturumdan devam ediyorsanız önce [TODO.md](./TODO.md)'yi okuyun** —
+> güncel durum, operasyonel altyapı bilgisi ve somut sıradaki adımlar orada.
 
 ## Mimari
 
