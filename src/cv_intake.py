@@ -5,6 +5,7 @@ Telegram'a proaktif bir mesajla iletilir.
 """
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -18,7 +19,23 @@ from config import DATA_DIR, settings
 from models.model_factory import get_model
 from schemas import CVIntake
 
+logger = logging.getLogger(__name__)
+
 KNOWLEDGE_DIR = DATA_DIR / "knowledgebase" / "adaylar"
+
+# Aynı session_id için chat_agent.arun() çağrılarını serileştirir: birden fazla CV
+# art arda/birlikte gelince aynı SQLite session satırına concurrent yazım oluyor,
+# biri sessizce çakışıp task'ı öldürebiliyordu (bildirim hiç gitmiyordu).
+_session_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_session_lock(session_id: str) -> asyncio.Lock:
+    lock = _session_locks.get(session_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _session_locks[session_id] = lock
+    return lock
+
 
 extract_and_validate_agent = Agent(
     name="CV Extractor",
@@ -103,6 +120,8 @@ async def _process_cv_background(
     if not chat_id:
         return
 
+    telegram = TelegramTools(token=settings.telegram_token, chat_id=chat_id)
+
     # Bildirimi de chat_agent'ın kendisi üretsin: raw Telegram gönderimiyle agent'ın
     # hiç haberi olmayan, kendi geçmişinde yer almayan ikinci bir akış oluşmasın.
     # Sadece bookkeeping sonucunu raporlamakla kalma: konuşma geçmişinde bu CV ile
@@ -116,10 +135,19 @@ async def _process_cv_background(
         "'kaydedildi' deyip bırakma. Bekleyen bir istek yoksa kısa, samimi bir "
         "tamamlanma bildirimi yeterli."
     )
-    notify_run = await chat_agent.arun(input=notify_input, session_id=session_id, user_id=user_id)
-    message_text = notify_run.content if isinstance(notify_run.content, str) else outcome
 
-    telegram = TelegramTools(token=settings.telegram_token, chat_id=chat_id)
+    # Birden fazla CV art arda/birlikte gelince aynı session_id üzerinde chat_agent.arun()
+    # concurrent çalışıyordu (aynı SQLite session satırına yazım çakışması); bu da bir
+    # task'ın sessizce exception'la ölmesine ve bildirimin hiç gitmemesine yol açıyordu.
+    # Aynı session için arun() çağrılarını sıraya sok, hata olursa da ham sonucu gönder.
+    try:
+        async with _get_session_lock(session_id):
+            notify_run = await chat_agent.arun(input=notify_input, session_id=session_id, user_id=user_id)
+        message_text = notify_run.content if isinstance(notify_run.content, str) else outcome
+    except Exception:
+        logger.exception("CV bildirimi üretilemedi (session_id=%s), ham sonuç gönderiliyor.", session_id)
+        message_text = outcome
+
     await asyncio.to_thread(telegram.send_message, message_text)
 
 
