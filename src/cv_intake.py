@@ -64,7 +64,9 @@ _suppress_reply_run_ids: set[int] = set()
 
 # Aynı isimde zaten kayıtlı bir aday bulunduğunda, persist etmeden önce kullanıcıya
 # güncelle/yeni-kayıt diye sorulur; cevap gelene kadar bekleyen karar burada tutulur.
-_pending_duplicate_decisions: dict[str, dict] = {}
+# Birden fazla CV aynı anda duplicate çıkabildiği için session başına LİSTE tutuluyor —
+# tek bir slot olsaydı ikinci bir soru ilkini sessizce ezerdi.
+_pending_duplicate_decisions: dict[str, list[dict]] = {}
 
 
 def _get_session_lock(session_id: str) -> asyncio.Lock:
@@ -205,12 +207,14 @@ async def _process_cv_background(
             # Email eşleşiyor (ya da ikisi de boş) — muhtemelen aynı kişi tekrar
             # yüklüyor. Persist etmeden önce kullanıcıya sor.
             if session_id:
-                _pending_duplicate_decisions[session_id] = {
-                    "intake": intake,
-                    "file": file,
-                    "candidate_id": matching_id,
-                    "filename": filename,
-                }
+                _pending_duplicate_decisions.setdefault(session_id, []).append(
+                    {
+                        "intake": intake,
+                        "file": file,
+                        "candidate_id": matching_id,
+                        "filename": filename,
+                    }
+                )
                 ask_candidate_id = matching_id
             else:
                 outcome = f"'{filename}' -> {_persist(intake, file, matching_id)}"
@@ -364,10 +368,12 @@ async def _resolve_duplicate_decision(
     session_id: str, user_text: str, chat_agent: Agent, user_id: Optional[str]
 ) -> None:
     """Kullanıcının 'güncelle mi, yeni kayıt mı' sorusuna verdiği serbest metin cevabını
-    LLM ile sınıflandırıp bekleyen persist işlemini tamamlar.
+    LLM ile sınıflandırır. Session'da birden fazla bekleyen karar varsa (birden fazla CV
+    aynı anda duplicate çıktıysa), cevabın hangisine ait olduğunu da aynı çağrıda belirletip
+    o persist işlemini tamamlar; diğer bekleyen kararlar etkilenmeden kalır.
     """
-    pending = _pending_duplicate_decisions.get(session_id)
-    if pending is None:
+    pending_list = _pending_duplicate_decisions.get(session_id)
+    if not pending_list:
         return
 
     chat_id = _chat_id_from_session_id(session_id)
@@ -375,19 +381,43 @@ async def _resolve_duplicate_decision(
         _pending_duplicate_decisions.pop(session_id, None)
         return
 
-    classify_run = await cv_filer_agent.arun(input=user_text, output_schema=DuplicateDecision)
+    if len(pending_list) > 1:
+        listing = "\n".join(f"- {p['filename']} (aday: {p['candidate_id']})" for p in pending_list)
+        classify_input = (
+            f"[SİSTEM: Şu an birden fazla bekleyen CV kayıt kararı var:\n{listing}\n"
+            f"Kullanıcının cevabı: '{user_text}']"
+        )
+    else:
+        classify_input = user_text
+
+    classify_run = await cv_filer_agent.arun(input=classify_input, output_schema=DuplicateDecision)
     classification = classify_run.content
     decision = classification.decision if isinstance(classification, DuplicateDecision) else "unclear"
+    target_filename = classification.target_filename if isinstance(classification, DuplicateDecision) else None
 
     if decision == "unclear":
-        message_text = (
-            "Anlayamadım — mevcut kaydı güncellemek mi istiyorsunuz, yoksa ayrı bir kayıt "
-            "olarak mı saklayayım? Lütfen 'güncelle' ya da 'yeni' diye net bir şekilde belirtin."
-        )
+        if len(pending_list) > 1:
+            listing = "\n".join(f"- {p['filename']}" for p in pending_list)
+            message_text = (
+                f"Hangi CV'yi kastettiğinizi anlayamadım. Bekleyen kayıtlar:\n{listing}\n"
+                "Lütfen dosya adını da belirterek 'güncelle' ya da 'yeni' yazın."
+            )
+        else:
+            message_text = (
+                "Anlayamadım — mevcut kaydı güncellemek mi istiyorsunuz, yoksa ayrı bir kayıt "
+                "olarak mı saklayayım? Lütfen 'güncelle' ya da 'yeni' diye net bir şekilde belirtin."
+            )
         await send_telegram_message(_telegram_bot, chat_id, message_text)
         return
 
-    _pending_duplicate_decisions.pop(session_id, None)
+    pending = None
+    if target_filename:
+        pending = next((p for p in pending_list if p["filename"] == target_filename), None)
+    if pending is None:
+        pending = pending_list[0]
+    pending_list.remove(pending)
+    if not pending_list:
+        _pending_duplicate_decisions.pop(session_id, None)
 
     intake: CVIntake = pending["intake"]
     file: File = pending["file"]

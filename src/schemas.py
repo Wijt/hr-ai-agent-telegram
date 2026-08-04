@@ -81,6 +81,14 @@ class DuplicateDecision(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    target_filename: Optional[str] = Field(
+        description=(
+            "Session'da birden fazla bekleyen karar varsa, kullanıcının cevabının hangi "
+            "dosyaya ait olduğu (cevapta geçen isim/dosya adına göre eşleştir, ör. "
+            "'kazımı güncelle' -> Kazım'ın dosyası). Tek bir bekleyen varsa ya da cevap "
+            "hangisine ait olduğunu belirtmiyorsa null bırak."
+        )
+    )
     decision: Literal["update", "new", "unclear"] = Field(
         description=(
             "update: kullanıcı mevcut kaydı güncellemek istiyor. "
