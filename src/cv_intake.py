@@ -12,9 +12,10 @@ from typing import Optional
 
 from agno.agent import Agent
 from agno.media import File
+from agno.os.interfaces.telegram.helpers import send_message as send_telegram_message
 from agno.run import RunContext
 from agno.run.agent import RunInput
-from agno.tools.telegram import TelegramTools
+from telebot.async_telebot import AsyncTeleBot
 
 from config import DATA_DIR, settings
 from models.model_factory import get_model
@@ -23,6 +24,11 @@ from schemas import CVIntake, DuplicateDecision
 logger = logging.getLogger(__name__)
 
 KNOWLEDGE_DIR = DATA_DIR / "knowledgebase" / "adaylar"
+
+# AgentOS'un kendi Telegram arayüzünün kullandığı AYNI gönderim fonksiyonunu (markdown->HTML
+# dönüşümü, uzun mesaj parçalama dahil) kullanıyoruz — proaktif mesajlar için ayrı, eksik
+# bir gönderim yolu (TelegramTools) icat etmeyelim diye tek bir bot instance'ı paylaşılıyor.
+_telegram_bot = AsyncTeleBot(settings.telegram_token)
 
 # Aynı session_id için chat_agent.arun() çağrılarını serileştirir: birden fazla CV
 # art arda/birlikte gelince aynı SQLite session satırına concurrent yazım oluyor,
@@ -150,12 +156,17 @@ def _persist(intake: CVIntake, file: File, candidate_id: str) -> str:
     )
 
 
-def _chat_id_from_session_id(session_id: Optional[str]) -> Optional[str]:
+def _chat_id_from_session_id(session_id: Optional[str]) -> Optional[int]:
     """Telegram session_id formatı: tg:{entity_id}:{chat_id}[:{topic_id}]."""
     if not session_id:
         return None
     parts = session_id.split(":")
-    return parts[2] if len(parts) > 2 else None
+    if len(parts) <= 2:
+        return None
+    try:
+        return int(parts[2])
+    except ValueError:
+        return None
 
 
 async def _process_cv_background(
@@ -213,8 +224,6 @@ async def _process_cv_background(
     if batch_ack_event is not None:
         await batch_ack_event.wait()
 
-    telegram = TelegramTools(token=settings.telegram_token, chat_id=chat_id)
-
     if ask_candidate_id is not None:
         ask_input = (
             f"[SİSTEM: '{filename}' işlendi ama '{ask_candidate_id}' adıyla zaten bir kayıt var ve "
@@ -240,7 +249,7 @@ async def _process_cv_background(
         except Exception:
             logger.exception("Duplicate-CV soru mesajı üretilemedi (session_id=%s).", session_id)
             message_text = fallback_ask
-        await asyncio.to_thread(telegram.send_message, message_text)
+        await send_telegram_message(_telegram_bot, chat_id, message_text)
         return
 
     # Bildirimi de chat_agent'ın kendisi üretsin: raw Telegram gönderimiyle agent'ın
@@ -276,7 +285,7 @@ async def _process_cv_background(
         logger.exception("CV bildirimi üretilemedi (session_id=%s), ham sonuç gönderiliyor.", session_id)
         message_text = outcome
 
-    await asyncio.to_thread(telegram.send_message, message_text)
+    await send_telegram_message(_telegram_bot, chat_id, message_text)
 
 
 async def _send_batch_ack(chat_agent: Agent, session_id: str, user_id: Optional[str]) -> None:
@@ -332,8 +341,7 @@ async def _send_batch_ack(chat_agent: Agent, session_id: str, user_id: Optional[
             logger.exception("Toplu CV onay mesajı üretilemedi (session_id=%s), yedek metin gönderiliyor.", session_id)
             message_text = fallback_text
 
-        telegram = TelegramTools(token=settings.telegram_token, chat_id=chat_id)
-        await asyncio.to_thread(telegram.send_message, message_text)
+        await send_telegram_message(_telegram_bot, chat_id, message_text)
     finally:
         # Onay mesajı gönderilsin ya da erken dönülsün (chat_id yok vb.), bu batch'e bağlı
         # dosya sonuçlarının sonsuza dek beklememesi için event'i her durumda set et.
@@ -355,7 +363,6 @@ async def _resolve_duplicate_decision(
     if not chat_id:
         _pending_duplicate_decisions.pop(session_id, None)
         return
-    telegram = TelegramTools(token=settings.telegram_token, chat_id=chat_id)
 
     classify_run = await duplicate_decision_agent.arun(input=user_text)
     classification = classify_run.content
@@ -366,7 +373,7 @@ async def _resolve_duplicate_decision(
             "Anlayamadım — mevcut kaydı güncellemek mi istiyorsunuz, yoksa ayrı bir kayıt "
             "olarak mı saklayayım? Lütfen 'güncelle' ya da 'yeni' diye net bir şekilde belirtin."
         )
-        await asyncio.to_thread(telegram.send_message, message_text)
+        await send_telegram_message(_telegram_bot, chat_id, message_text)
         return
 
     _pending_duplicate_decisions.pop(session_id, None)
@@ -396,7 +403,7 @@ async def _resolve_duplicate_decision(
         logger.exception("Duplicate-CV karar bildirimi üretilemedi (session_id=%s).", session_id)
         message_text = outcome
 
-    await asyncio.to_thread(telegram.send_message, message_text)
+    await send_telegram_message(_telegram_bot, chat_id, message_text)
 
 
 def intake_pre_hook(run_input: RunInput, run_context: RunContext, agent: Agent) -> None:
@@ -467,7 +474,7 @@ def intake_pre_hook(run_input: RunInput, run_context: RunContext, agent: Agent) 
         # Bu turda kullanıcıya görünecek bir çıktı istemiyoruz: Telegram arayüzü, model hiç
         # metin/araç çıktısı üretmezse (accumulated_content boş kalırsa) hiçbir mesaj
         # göndermiyor — streaming açıkken bile. Toplu onay mesajı zaten ayrı bir kanaldan
-        # (_send_batch_ack, doğrudan TelegramTools ile) gidecek.
+        # (_send_batch_ack, send_telegram_message ile) gidecek.
         run_input.input_content = (
             "[SİSTEM: Bu bir arka plan bildirimidir, kullanıcıya gösterilecek bir mesaj "
             "DEĞİLDİR. Bu turda hiçbir araç çağırma ve hiçbir metin üretme — yanıtını "
