@@ -67,3 +67,17 @@ class CVIntake(BaseModel):
     cv: Optional[NormalizedCV] = Field(
         description="is_cv=true ise çıkarılan normalize veri, değilse null"
     )
+
+
+class DuplicateDecision(BaseModel):
+    """Aynı isimde zaten kayıtlı bir aday bulunduğunda kullanıcının serbest metin cevabını sınıflandırır."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["update", "new", "unclear"] = Field(
+        description=(
+            "update: kullanıcı mevcut kaydı güncellemek istiyor. "
+            "new: kullanıcı ayrı/yeni bir kayıt istiyor. "
+            "unclear: cevap net değil, tekrar sorulmalı."
+        )
+    )

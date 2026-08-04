@@ -5,6 +5,7 @@ Telegram'a proaktif bir mesajla iletilir.
 """
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import Optional
@@ -17,7 +18,7 @@ from agno.tools.telegram import TelegramTools
 
 from config import DATA_DIR, settings
 from models.model_factory import get_model
-from schemas import CVIntake
+from schemas import CVIntake, DuplicateDecision
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,10 @@ _batch_ack_events: dict[str, asyncio.Event] = {}
 # boşaltır (Telegram arayüzü boş content'te mesaj göndermiyor).
 _suppress_reply_run_ids: set[int] = set()
 
+# Aynı isimde zaten kayıtlı bir aday bulunduğunda, persist etmeden önce kullanıcıya
+# güncelle/yeni-kayıt diye sorulur; cevap gelene kadar bekleyen karar burada tutulur.
+_pending_duplicate_decisions: dict[str, dict] = {}
+
 
 def _get_session_lock(session_id: str) -> asyncio.Lock:
     lock = _session_locks.get(session_id)
@@ -67,6 +72,19 @@ extract_and_validate_agent = Agent(
     output_schema=CVIntake,
 )
 
+duplicate_decision_agent = Agent(
+    name="Duplicate Decision Classifier",
+    model=get_model(),
+    instructions=(
+        "Kullanıcıya, yüklediği CV'nin aynı isimde zaten kayıtlı bir adayla eşleştiği ve "
+        "mevcut kaydı güncellemek mi yoksa ayrı yeni bir kayıt olarak mı saklamak istediği "
+        "soruldu. Kullanıcının serbest metin cevabını sınıflandır: 'update' (mevcut kaydı "
+        "güncelle/üzerine yaz demek istiyor), 'new' (ayrı/farklı/yeni bir kayıt istiyor), "
+        "'unclear' (cevap ne update ne new'e açıkça karşılık gelmiyor)."
+    ),
+    output_schema=DuplicateDecision,
+)
+
 
 _TURKISH_ASCII_MAP = str.maketrans(
     {
@@ -87,9 +105,28 @@ def _slugify(name: str) -> str:
     return "_".join(ascii_name.strip().lower().split()) or "isimsiz_aday"
 
 
-def _persist(intake: CVIntake, file: File) -> str:
+def _existing_candidate_email(candidate_id: str) -> Optional[str]:
+    """Zaten kayıtlı bir adayın normalized.json'undan email'i okur, yoksa None döner."""
+    normalized_path = KNOWLEDGE_DIR / candidate_id / f"{candidate_id}_normalized.json"
+    if not normalized_path.exists():
+        return None
+    try:
+        data = json.loads(normalized_path.read_text(encoding="utf-8"))
+        return (data.get("personal_info") or {}).get("email")
+    except Exception:
+        logger.exception("Mevcut aday verisi okunamadı: %s", candidate_id)
+        return None
+
+
+def _next_available_candidate_id(base_id: str) -> str:
+    n = 2
+    while (KNOWLEDGE_DIR / f"{base_id}_{n}").exists():
+        n += 1
+    return f"{base_id}_{n}"
+
+
+def _persist(intake: CVIntake, file: File, candidate_id: str) -> str:
     cv = intake.cv
-    candidate_id = _slugify(cv.personal_info.full_name or "")
     candidate_dir = KNOWLEDGE_DIR / candidate_id
     raw_dir = candidate_dir / "_raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -132,12 +169,40 @@ async def _process_cv_background(
     intake: CVIntake = run_output.content
 
     filename = file.filename or "CV.pdf"
+    outcome: Optional[str] = None
+    ask_candidate_id: Optional[str] = None
 
     if not isinstance(intake, CVIntake) or not intake.is_cv or intake.injection_detected:
         reason = intake.reason if isinstance(intake, CVIntake) and intake.reason else "Geçersiz veya güvensiz belge."
         outcome = f"'{filename}' işlenemedi: {reason}"
     else:
-        outcome = f"'{filename}' -> {_persist(intake, file)}"
+        candidate_id = _slugify(intake.cv.personal_info.full_name or "")
+        if (KNOWLEDGE_DIR / candidate_id).exists():
+            new_email = (intake.cv.personal_info.email or "").strip().lower()
+            old_email = (_existing_candidate_email(candidate_id) or "").strip().lower()
+            if new_email == old_email:
+                # Email eşleşiyor (ya da ikisi de boş) — muhtemelen aynı kişi tekrar
+                # yüklüyor. Persist etmeden önce kullanıcıya sor.
+                if session_id:
+                    _pending_duplicate_decisions[session_id] = {
+                        "intake": intake,
+                        "file": file,
+                        "candidate_id": candidate_id,
+                        "filename": filename,
+                    }
+                    ask_candidate_id = candidate_id
+                else:
+                    outcome = f"'{filename}' -> {_persist(intake, file, candidate_id)}"
+            else:
+                # Email farklı — aynı isimde farklı bir kişi. Sormadan ayrı kayıt aç.
+                new_id = _next_available_candidate_id(candidate_id)
+                outcome = (
+                    f"'{filename}' -> {_persist(intake, file, new_id)} (Not: '{candidate_id}' adında "
+                    f"farklı bir e-postayla kayıtlı başka bir aday zaten vardı, bu CV ayrı olarak "
+                    f"'{new_id}' altında saklandı.)"
+                )
+        else:
+            outcome = f"'{filename}' -> {_persist(intake, file, candidate_id)}"
 
     chat_id = _chat_id_from_session_id(session_id)
     if not chat_id:
@@ -149,6 +214,29 @@ async def _process_cv_background(
         await batch_ack_event.wait()
 
     telegram = TelegramTools(token=settings.telegram_token, chat_id=chat_id)
+
+    if ask_candidate_id is not None:
+        ask_input = (
+            f"[SİSTEM: '{filename}' işlendi ama '{ask_candidate_id}' adıyla zaten bir kayıt var ve "
+            "muhtemelen aynı kişiye ait (email eşleşiyor ya da CV'de email yok). Kullanıcıya kısaca "
+            "sor: mevcut kaydı güncellemek mi istiyor, yoksa ayrı yeni bir kayıt olarak mı saklamamı "
+            "istiyor? 'güncelle' ya da 'yeni' gibi net bir kelimeyle cevap vermesini iste.]"
+        )
+        fallback_ask = (
+            f"'{filename}' için '{ask_candidate_id}' adında zaten bir kayıt var. Güncelleyeyim mi, "
+            "yoksa ayrı bir kayıt mı açayım? ('güncelle' / 'yeni')"
+        )
+        try:
+            async with _get_session_lock(session_id):
+                ask_run = await chat_agent.arun(input=ask_input, session_id=session_id, user_id=user_id)
+            message_text = (
+                ask_run.content if isinstance(ask_run.content, str) and ask_run.content.strip() else fallback_ask
+            )
+        except Exception:
+            logger.exception("Duplicate-CV soru mesajı üretilemedi (session_id=%s).", session_id)
+            message_text = fallback_ask
+        await asyncio.to_thread(telegram.send_message, message_text)
+        return
 
     # Bildirimi de chat_agent'ın kendisi üretsin: raw Telegram gönderimiyle agent'ın
     # hiç haberi olmayan, kendi geçmişinde yer almayan ikinci bir akış oluşmasın.
@@ -227,6 +315,59 @@ async def _send_batch_ack(chat_agent: Agent, session_id: str, user_id: Optional[
             event.set()
 
 
+async def _resolve_duplicate_decision(
+    session_id: str, user_text: str, chat_agent: Agent, user_id: Optional[str]
+) -> None:
+    """Kullanıcının 'güncelle mi, yeni kayıt mı' sorusuna verdiği serbest metin cevabını
+    LLM ile sınıflandırıp bekleyen persist işlemini tamamlar.
+    """
+    pending = _pending_duplicate_decisions.get(session_id)
+    if pending is None:
+        return
+
+    chat_id = _chat_id_from_session_id(session_id)
+    if not chat_id:
+        _pending_duplicate_decisions.pop(session_id, None)
+        return
+    telegram = TelegramTools(token=settings.telegram_token, chat_id=chat_id)
+
+    classify_run = await duplicate_decision_agent.arun(input=user_text)
+    classification = classify_run.content
+    decision = classification.decision if isinstance(classification, DuplicateDecision) else "unclear"
+
+    if decision == "unclear":
+        message_text = (
+            "Anlayamadım — mevcut kaydı güncellemek mi istiyorsunuz, yoksa ayrı bir kayıt "
+            "olarak mı saklayayım? Lütfen 'güncelle' ya da 'yeni' diye net bir şekilde belirtin."
+        )
+        await asyncio.to_thread(telegram.send_message, message_text)
+        return
+
+    _pending_duplicate_decisions.pop(session_id, None)
+
+    intake: CVIntake = pending["intake"]
+    file: File = pending["file"]
+    candidate_id: str = pending["candidate_id"]
+    filename: str = pending["filename"]
+
+    if decision == "update":
+        outcome = f"'{filename}' -> {_persist(intake, file, candidate_id)}"
+    else:
+        new_id = _next_available_candidate_id(candidate_id)
+        outcome = f"'{filename}' -> {_persist(intake, file, new_id)} (Ayrı kayıt olarak saklandı.)"
+
+    notify_input = f"[SİSTEM: Kullanıcının kararı uygulandı. Ham sonuç: {outcome}]\nBunu kullanıcıya kısaca, samimi bir dille onayla."
+    try:
+        async with _get_session_lock(session_id):
+            notify_run = await chat_agent.arun(input=notify_input, session_id=session_id, user_id=user_id)
+        message_text = notify_run.content if isinstance(notify_run.content, str) else outcome
+    except Exception:
+        logger.exception("Duplicate-CV karar bildirimi üretilemedi (session_id=%s).", session_id)
+        message_text = outcome
+
+    await asyncio.to_thread(telegram.send_message, message_text)
+
+
 def intake_pre_hook(run_input: RunInput, run_context: RunContext, agent: Agent) -> None:
     """Run'a dosya eklenmişse CV işlemeyi başlatır ve modele bunu açıkça bildirir.
 
@@ -236,12 +377,28 @@ def intake_pre_hook(run_input: RunInput, run_context: RunContext, agent: Agent) 
     if run_context.session_state is None:
         run_context.session_state = {}
 
+    session_id = run_context.session_id
+
+    # Bekleyen bir "güncelle mi, yeni kayıt mı" kararı varsa ve bu tur düz metinse
+    # (yeni bir dosya değilse), cevabı LLM ile sınıflandırıp o kararı çöz.
+    if session_id and session_id in _pending_duplicate_decisions and not run_input.files:
+        original_text = run_input.input_content
+        if isinstance(original_text, str) and original_text.strip():
+            asyncio.create_task(
+                _resolve_duplicate_decision(session_id, original_text, agent, run_context.user_id)
+            )
+            run_input.input_content = (
+                "[SİSTEM: Bekleyen bir CV kayıt kararı arka planda değerlendiriliyor. Bu turda "
+                "hiçbir araç çağırma ve hiçbir metin üretme — yanıtını tamamen boş bırak.]"
+            )
+            _suppress_reply_run_ids.add(id(run_context))
+            return
+
     if not run_input.files:
         return
 
     file = run_input.files[0]
     filename = file.filename or "CV.pdf"
-    session_id = run_context.session_id
 
     run_context.session_state["cv_current_file"] = filename
 
