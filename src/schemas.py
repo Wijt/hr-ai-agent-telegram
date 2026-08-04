@@ -55,7 +55,8 @@ class NormalizedCV(BaseModel):
 
 
 class CVIntake(BaseModel):
-    """extract_and_validate step'inin output_schema'sı: doğrulama + normalize edilmiş CV bir arada."""
+    """cv_filer_agent'ın CV işleme adımının output_schema'sı: doğrulama + normalize edilmiş
+    CV + knowledgebase'de bulunan olası duplicate bir arada."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -66,6 +67,12 @@ class CVIntake(BaseModel):
     reason: Optional[str] = Field(description="is_cv veya injection_detected kararının kısa gerekçesi")
     cv: Optional[NormalizedCV] = Field(
         description="is_cv=true ise çıkarılan normalize veri, değilse null"
+    )
+    existing_candidate_id: Optional[str] = Field(
+        description=(
+            "is_cv=true ise: knowledgebase'i tarayıp bu CV'nin email'iyle eşleşen bir aday "
+            "bulunduysa o adayın candidate_id'si (klasör adı), bulunamadıysa null."
+        )
     )
 
 

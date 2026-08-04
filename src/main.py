@@ -1,20 +1,11 @@
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
-from agno.knowledge.filesystem import FileSystemKnowledge
 from agno.os import AgentOS
 from agno.os.interfaces.telegram import Telegram
 
 from config import DATA_DIR, settings
-from cv_intake import KNOWLEDGE_DIR, intake_post_hook, intake_pre_hook
+from cv_intake import fs_knowledge, intake_post_hook, intake_pre_hook
 from models.model_factory import get_model
-
-KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
-
-fs_knowledge = FileSystemKnowledge(
-    base_dir=str(KNOWLEDGE_DIR),
-    include_patterns=["*.json", "*.md"],
-    exclude_patterns=["_raw", ".git", "__pycache__", "node_modules", ".venv", "venv"],
-)
 
 agent = Agent(
     name="HR Bot",
