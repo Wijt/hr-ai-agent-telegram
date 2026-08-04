@@ -228,7 +228,12 @@ async def _process_cv_background(
         )
         try:
             async with _get_session_lock(session_id):
-                ask_run = await chat_agent.arun(input=ask_input, session_id=session_id, user_id=user_id)
+                ask_run = await chat_agent.arun(
+                    input=ask_input,
+                    session_id=session_id,
+                    user_id=user_id,
+                    metadata={"cv_intake_internal": True},
+                )
             message_text = (
                 ask_run.content if isinstance(ask_run.content, str) and ask_run.content.strip() else fallback_ask
             )
@@ -260,7 +265,12 @@ async def _process_cv_background(
     # Aynı session için arun() çağrılarını sıraya sok, hata olursa da ham sonucu gönder.
     try:
         async with _get_session_lock(session_id):
-            notify_run = await chat_agent.arun(input=notify_input, session_id=session_id, user_id=user_id)
+            notify_run = await chat_agent.arun(
+                input=notify_input,
+                session_id=session_id,
+                user_id=user_id,
+                metadata={"cv_intake_internal": True},
+            )
         message_text = notify_run.content if isinstance(notify_run.content, str) else outcome
     except Exception:
         logger.exception("CV bildirimi üretilemedi (session_id=%s), ham sonuç gönderiliyor.", session_id)
@@ -288,17 +298,33 @@ async def _send_batch_ack(chat_agent: Agent, session_id: str, user_id: Optional[
             return
 
         listing = "\n".join(f"- {name}" for name in filenames)
-        fallback_text = f"Şu dosyaları aldım, teker teker işleyip size döneceğim:\n{listing}"
 
-        ack_input = (
-            f"[SİSTEM: Kullanıcı şu dosyaları yükledi:\n{listing}\n"
-            "Bunların hepsini aldığını, teker teker arka planda işleyip her biri için ayrı "
-            "sonuç mesajıyla döneceğini söyleyen kısa, samimi bir mesaj yaz. Dosya adlarını listele.]"
-        )
+        if len(filenames) == 1:
+            fallback_text = f"'{filenames[0]}' dosyasını aldım, işliyorum, birazdan sonuçla döneceğim."
+            ack_input = (
+                f"[SİSTEM: Kullanıcı '{filenames[0]}' adlı TEK bir dosya yükledi. Bu dosyayı aldığını "
+                "ve ŞU ANDA arka planda işlemekte olduğunu söyleyen kısa, samimi bir mesaj yaz. İşlem "
+                "HENÜZ TAMAMLANMADI — 'işledim', 'tamamladım', 'kaydettim' gibi geçmiş zaman/bitmiş iş "
+                "ifadeleri KULLANMA, 'işliyorum', 'kısa süre içinde döneceğim' gibi devam eden bir işi "
+                "anlat. 'dosyaları', 'hepsini', 'teker teker' gibi çoğul/toplu ifadeler de KULLANMA, "
+                "tek bir dosyadan bahsediyorsun.]"
+            )
+        else:
+            fallback_text = f"Şu dosyaları aldım, teker teker işleyip size döneceğim:\n{listing}"
+            ack_input = (
+                f"[SİSTEM: Kullanıcı şu {len(filenames)} dosyayı yükledi:\n{listing}\n"
+                "Bunların hepsini aldığını, teker teker arka planda işleyip her biri için ayrı "
+                "sonuç mesajıyla döneceğini söyleyen kısa, samimi bir mesaj yaz. Dosya adlarını listele.]"
+            )
 
         try:
             async with _get_session_lock(session_id):
-                ack_run = await chat_agent.arun(input=ack_input, session_id=session_id, user_id=user_id)
+                ack_run = await chat_agent.arun(
+                    input=ack_input,
+                    session_id=session_id,
+                    user_id=user_id,
+                    metadata={"cv_intake_internal": True},
+                )
             message_text = (
                 ack_run.content if isinstance(ack_run.content, str) and ack_run.content.strip() else fallback_text
             )
@@ -359,7 +385,12 @@ async def _resolve_duplicate_decision(
     notify_input = f"[SİSTEM: Kullanıcının kararı uygulandı. Ham sonuç: {outcome}]\nBunu kullanıcıya kısaca, samimi bir dille onayla."
     try:
         async with _get_session_lock(session_id):
-            notify_run = await chat_agent.arun(input=notify_input, session_id=session_id, user_id=user_id)
+            notify_run = await chat_agent.arun(
+                input=notify_input,
+                session_id=session_id,
+                user_id=user_id,
+                metadata={"cv_intake_internal": True},
+            )
         message_text = notify_run.content if isinstance(notify_run.content, str) else outcome
     except Exception:
         logger.exception("Duplicate-CV karar bildirimi üretilemedi (session_id=%s).", session_id)
@@ -374,6 +405,12 @@ def intake_pre_hook(run_input: RunInput, run_context: RunContext, agent: Agent) 
     Modelin bunu fark edip fark etmemesine güvenmiyoruz (send_media_to_model=False
     olduğu için dosya içeriğini zaten göremiyor) — tetikleme burada, deterministik.
     """
+    # Bu agent'ın kendi ask/notify/batch-ack çağrıları da (aynı agent+session kullandıkları
+    # için) bu hook'u tetikliyor — kendi ürettiğimiz sistem promptunu kullanıcının cevabıymış
+    # gibi işlememek için, içsel çağrılar metadata ile işaretlenip burada hemen çıkılır.
+    if run_context.metadata and run_context.metadata.get("cv_intake_internal"):
+        return
+
     if run_context.session_state is None:
         run_context.session_state = {}
 
