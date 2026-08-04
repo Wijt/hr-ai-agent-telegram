@@ -1,57 +1,58 @@
 # Ajan Tasarımı — telegram-ai-hr-bot
 
-`ARCHITECTURE.md`'de tanımlanan sistemin ajan/tool/pipeline envanteri. Bu dosya, her
-parçanın *neden var olduğunu*, *ne zaman çağrıldığını* ve *hangi şemayla konuştuğunu*
-kayıt altına alır — implementasyon sırasında `src/hrbot/agents/` altındaki kodun
-doğrudan karşılığıdır.
+`ARCHITECTURE.md` sistemin genel tasarımını anlatır. Bu dosya, sistemin ajan, tool,
+ve pipeline listesini anlatır. Her parçanın neden var olduğunu kaydeder. Her
+parçanın ne zaman çağrıldığını kaydeder. Her parçanın hangi şemayla konuştuğunu
+kaydeder. Bu dosya, `src/` altındaki kodun doğrudan karşılığıdır.
 
 ## 0. Çalışma İlkeleri (KISS)
 
-Bu proje üzerinde çalışan herkes (bu oturum dahil, gelecekteki oturumlar dahil)
-aşağıdaki ilkelere uyar. Bu bölüm var olduğu için bu ilkeler her seferinde yeniden
-anlatılmaz — kod yazmadan önce buraya bakılır.
+Bu ilkeler tüm proje için geçerlidir. Bu ilkeleri şu an uygula. Bu ilkeleri gelecek
+oturumlarda da uygula. Bu bölüm bunun için var — bu ilkeleri tekrar açıklama. Kod
+yazmadan önce bu bölüme bak.
 
-1. **Keep It Simple, Stupid — ama basitlik tutarlılık demektir, framework'ten kaçınmak
-   değil.** Bir CV'yi işlemenin (doğrula → çıkar → [ileride: bilgi bankasına kaydet])
-   tek, paylaşılan bir tarifi var: `cv_processing_workflow`. Tekli mod bunu bir kez
-   çalıştırır, toplu mod **aynı tarifi** N aday için paralel çalıştırır. İki farklı
-   mimari (biri düz fonksiyon zinciri, biri Workflow) tutmak — ilk bakışta "daha az
-   framework kullanımı" gibi görünse de — aslında iki ayrı deseni öğrenip bakım
-   yapmayı gerektirdiği için daha karmaşıktır. Ayrıca Agno'nun kendi resmi örnekleri,
-   paralellik olmasa bile ardışık çok-adımlı ajan zincirlerini hep `Workflow` ile
-   kuruyor — bu bizim icat ettiğimiz bir şey değil, framework'ün kendi idiom'u
-   (bkz. madde 4). Basitlik = **tek, tutarlı, test edilmiş bir tarif; onu tekrar
-   tekrar kullanmak.**
-2. **Kompleksite adım adım, gerektikçe eklenir.** Baştan "olası her ihtiyacı"
-   karşılayan bir mimari kurulmaz. En basit çalışan hâliyle başlanır, bir sonraki
-   katman ancak bir öncekinin çalıştığı doğrulandıktan sonra eklenir. Aşamalı plan
-   için bkz. `ARCHITECTURE.md` §13.
-3. **Hello World önce.** İlk yazılacak kod, ucu ucuna çalışan en minimal iskelet
-   olmalı (Telegram bağlantısı + tek bir tool'suz sohbet ajanı) — CV analizi, batch
-   skorlama, kriter yönetimi gibi hiçbir özellik olmadan. Bu çalıştıktan sonra
-   üstüne katman katman eklenir.
-4. **Sektör best practice'i araştırılır, uygulanır.** Bir şey yazmadan önce Agno'nun
-   resmi dokümantasyonu/örnek kodları (ya da ilgili framework'ün resmi kaynağı)
-   aranır, oradaki idiom'lar takip edilir. Örneklerden **sapılmaz.**
-5. **Sapma gerekiyorsa, önce sorulur.** Best practice'ten farklı bir yol izlemek
-   gerçekten gerekiyorsa (performans, ödev gereksinimi, vb. somut bir gerekçeyle),
-   bu **kullanıcıya gerekçesiyle sorulup onay alınmadan** yapılmaz.
+1. **Basit tut.** Basitlik tutarlılık demektir. Basitlik framework'ten kaçınmak
+   demek değildir. Bir CV'yi işlemek için tek bir tarif kullan: `cv_processing_workflow`.
+   Bu tarif önce doğrular, sonra çıkarır. (İleride bir adım daha eklenecek: bilgi
+   bankasına kaydetme.) Tekli mod bu tarifi bir kez çalıştırır. Toplu mod aynı
+   tarifi N aday için paralel çalıştırır. İki ayrı mimari kurma — biri düz fonksiyon
+   zinciri, biri Workflow. İki ayrı mimari daha az framework kullanımı gibi görünür.
+   Ama iki ayrı mimari iki ayrı deseni öğretir, ve iki ayrı deseni bakımda tutmayı
+   gerektirir. Bu daha karmaşıktır. Agno'nun resmi örnekleri de ardışık ajan
+   zincirlerini hep `Workflow` ile kurar — paralellik olmasa bile (bkz. madde 4).
+   Bu bizim icadımız değildir. Bu, framework'ün kendi kuralıdır. Tek, tutarlı, test
+   edilmiş bir tarif kullan. Bu tarifi tekrar tekrar kullan.
+2. **Kompleksiteyi adım adım ekle.** Baştan her olası ihtiyacı karşılayan bir
+   mimari kurma. En basit çalışan hâlle başla. Bir sonraki katmanı, ancak bir
+   öncekinin çalıştığını doğruladıktan sonra ekle. Aşamalı plan `ARCHITECTURE.md`
+   §13'tedir.
+3. **Önce Hello World yaz.** İlk kod, uçtan uca çalışan en küçük iskelet olmalıdır:
+   Telegram bağlantısı ve tek bir sohbet ajanı, hiçbir araç (tool) olmadan. Bu ilk
+   sürümde CV analizi yoktur. Toplu skorlama yoktur. Kriter yönetimi yoktur. Bu
+   iskelet çalıştıktan sonra, üstüne katman katman ekle.
+4. **Sektörün en iyi uygulamalarını araştır ve uygula.** Kod yazmadan önce Agno'nun
+   resmi dokümanlarını ve örnek kodlarını ara. Başka bir framework kullanıyorsan,
+   onun resmi kaynağını ara. Bulduğun örneklerin desenini izle. Örneklerden sapma.
+5. **Sapman gerekiyorsa, önce sor.** En iyi uygulamadan farklı bir yol izlemen
+   gerçekten gerekiyorsa (performans veya ödev gereksinimi gibi somut bir sebeple),
+   bunu kullanıcıya gerekçesiyle sor. Onay almadan yapma.
 
 ## Tasarım İlkesi
 
-Tek bir "her şeyi yapan" ajan yerine, **bir router + üç uzman ajan + tek paylaşılan
-CV pipeline'ı** modeli:
+Bu proje bir "her şeyi yapan tek ajan" modeli kullanmaz. Bunun yerine bir router,
+üç uzman ajan, ve tek bir paylaşılan CV pipeline'ı kullanır:
 
-- **Router Agent** — Telegram'a bağlı tek ajan. Kullanıcıyla doğrudan konuşan bu.
-  Kendi başına CV analiz etmez; ne zaman hangi tool'un devreye gireceğine
-  tool-calling ile karar verir.
-- **`cv_processing_workflow`** — bir adayı (doğrula → çıkar) işlemenin **tek, paylaşılan
-  tarifi**. Hem tekli modda (bir kez) hem toplu modda (N kez, paralel) **birebir aynı
-  nesne** çalıştırılır. Kod tekrarı yok, iki ayrı mimari yok.
-- **Extraction / Analysis / Scoring** ajanları LLM tarafından *seçilmez* —
-  `cv_processing_workflow`'un bir adımı olarak (Extraction) ya da onu saran bir
-  fonksiyon/executor içinden (Analysis, Scoring) çağrılır. Bu ayrım kararlılık için
-  kritik (bkz. `ARCHITECTURE.md` §5).
+- **Router Agent** — Telegram'a bağlı tek ajandır. Kullanıcıyla doğrudan konuşur.
+  Kendisi CV analiz etmez. Hangi tool'un ne zaman çalışacağına tool-calling ile
+  karar verir.
+- **`cv_processing_workflow`** — bir adayı işlemenin tek, paylaşılan tarifidir. Bu
+  tarif önce doğrular, sonra çıkarır. Tekli mod bu tarifi bir kez çalıştırır. Toplu
+  mod aynı nesneyi N kez, paralel çalıştırır. Bu tasarımda kod tekrarı yoktur. İki
+  ayrı mimari yoktur.
+- **Extraction, Analysis, ve Scoring ajanları** — LLM bu ajanları seçmez.
+  Extraction, `cv_processing_workflow`'un bir adımı olarak çalışır. Analysis ve
+  Scoring, bu tarifi saran bir fonksiyon içinden çalışır. Bu ayrım kararlılık için
+  kritiktir (bkz. `ARCHITECTURE.md` §5).
 
 ---
 
@@ -60,15 +61,16 @@ CV pipeline'ı** modeli:
 **Dosya:** `agents/chat_agent.py`
 **Bağlı olduğu arayüz:** Agno `Telegram` interface (`AgentOS(interfaces=[Telegram(agent=router_agent)])`)
 **Model:** `model_factory.get_model()` (varsayılan OpenAI, env ile Ollama'ya geçer)
-**db:** kendi `db`'si yok — `AgentOS(db=SqliteDb(...))` seviyesinde tanımlanır ve
-kendi db'si olmayan her agent/team/workflow'a otomatik atanır (bkz.
-`ARCHITECTURE.md` §2). Aşama 2-3'te eklenecek diğer bileşenler aynı dosyayı tek
-tanımdan paylaşır — her birine ayrı ayrı `db=` yazmaya gerek yok.
-**Diğer ayarlar:** `send_media_to_model=False`, `store_media=True` — PDF ham içeriği
-LLM'e gönderilmez, sadece tool erişimi için saklanır (bkz. `ARCHITECTURE.md` §10.1).
-**`pre_hook`:** o turda ekli dosya (`files`) varsa `tool_choice="submit_cv"` olarak
-sabitlenir — dosya geldiğinde `submit_cv`'nin çağrılması LLM kararına değil koda
-bağlıdır (bkz. `ARCHITECTURE.md` §5).
+**db:** Router Agent'ın kendi `db`'si yoktur. `db`, `AgentOS(db=SqliteDb(...))`
+seviyesinde tanımlanır. Agno bu `db`'yi, kendi `db`'si olmayan her agent, team, ve
+workflow'a otomatik atar (bkz. `ARCHITECTURE.md` §2). Aşama 2-3'te eklenecek
+bileşenler aynı dosyayı bu tek tanımdan paylaşır. Her bileşene ayrı `db=` yazma.
+**Diğer ayarlar:** `send_media_to_model=False`, `store_media=True`. PDF'in ham
+içeriği LLM'e gönderilmez. PDF sadece tool erişimi için saklanır (bkz.
+`ARCHITECTURE.md` §10.1).
+**`pre_hook`:** O turda ekli dosya (`files`) varsa, `pre_hook` `tool_choice`'u
+`submit_cv`'ye sabitler. Dosya geldiğinde `submit_cv` çağrılır — bu LLM'in
+kararına değil, koda bağlıdır (bkz. `ARCHITECTURE.md` §5).
 
 **Instructions (özet, Türkçe):**
 - Varsayılan davranış: samimi, kısa, bağlamı koruyan bir sohbet asistanı gibi yanıt ver.
@@ -76,29 +78,30 @@ bağlıdır (bkz. `ARCHITECTURE.md` §5).
   değerlendir"` gibi ifadeler) → `set_dynamic_criteria` tool'unu çağır.
 - Kullanıcı `/batch_analyze` yazdıysa veya birden fazla CV göndereceğini belirtiyorsa
   → `start_batch_session` çağır.
-- Kullanıcı bir PDF belgesi gönderdiyse → **her zaman** `submit_cv` çağır (karar
-  verme, tool zaten mevcut duruma göre doğru şeyi yapacak).
+- Kullanıcı bir PDF belgesi gönderdiyse → her zaman `submit_cv` çağır. Karar
+  verme — tool zaten doğru şeyi yapar.
 - Kullanıcı `/done` yazdıysa → `finalize_batch` çağır.
-- Asla CV içeriğini kendi başına yorumlama/skorlama — bu iş uzman ajanlara ait.
+- CV içeriğini kendi başına yorumlama. CV içeriğini kendi başına skorlama. Bu iş
+  uzman ajanlara aittir.
 
 **Tool envanteri:**
 
 | Tool | İmza | Ne yapar |
 |---|---|---|
-| `set_dynamic_criteria` | `(run_context, criteria: list[str]) -> str` | Kullanıcının serbest metnini LLM zaten tool-call argümanı olarak listeye çevirir; `session_state["dynamic_criteria"]` güncellenir. |
-| `start_batch_session` | `(run_context) -> str` | `session_state["mode"] = "collecting_batch"`, `batch_files = []`. Kriter tanımlı değilse kullanıcıyı önce kritere yönlendirir. |
-| `submit_cv` | `(run_context, files: Optional[Sequence[File]] = None) -> str` | Bkz. §2. **idle**'da `cv_processing_workflow`'u hemen çalıştırıp analiz eder; **batch**'te dosyayı işlemeden biriktirir (işleme `finalize_batch`'e ertelenir — bkz. §3). `pre_hook` sayesinde dosya varken çağrılması garanti. |
-| `finalize_batch` | `(run_context) -> str` | Bkz. §3. Biriktirilen her dosya için **aynı `cv_processing_workflow`'u paralel olarak** çalıştırır, skorlar, JSON döner, mode'u `idle`'a çeker. |
+| `set_dynamic_criteria` | `(run_context, criteria: list[str]) -> str` | Kullanıcının serbest metnini LLM zaten tool-call argümanı olarak listeye çevirir. `session_state["dynamic_criteria"]`'i günceller. |
+| `start_batch_session` | `(run_context) -> str` | `session_state["mode"] = "collecting_batch"`, `batch_files = []`. Kriter tanımlı değilse, kullanıcıyı önce kritere yönlendirir. |
+| `submit_cv` | `(run_context, files: Optional[Sequence[File]] = None) -> str` | Bkz. §2. **idle**'da `cv_processing_workflow`'u hemen çalıştırır ve analiz eder. **batch**'te dosyayı işlemeden biriktirir (işleme `finalize_batch`'e ertelenir — bkz. §3). `pre_hook` dosya varken çağrılmasını garanti eder. |
+| `finalize_batch` | `(run_context) -> str` | Bkz. §3. Biriktirilen her dosya için aynı `cv_processing_workflow`'u paralel çalıştırır, skorlar, JSON döner, mode'u `idle`'a çeker. |
 
-**Kullanılmayan/gerek olmayan tool'lar:** `reset` — Agno'nun native `/new` komutu
-session_state'i zaten sıfırlıyor, tekrar yazılmayacak.
+**Kullanılmayan tool:** `reset`. Agno'nun native `/new` komutu session_state'i
+zaten sıfırlar. Ayrı bir `reset` tool'u yazma.
 
 ---
 
 ## 2. `cv_processing_workflow` — Tek, Paylaşılan Tarif
 
-Bir adayı işlemenin **tek** tanımı. Hem tekli hem toplu mod bunu birebir aynı nesne
-olarak kullanır — biri bir kez, öbürü N kez paralel:
+Bir adayı işlemenin tek tanımı budur. Tekli mod ve toplu mod bunu aynı nesne
+olarak kullanır. Tekli mod bir kez çalıştırır. Toplu mod N kez, paralel çalıştırır.
 
 ```python
 cv_processing_workflow = Workflow(
@@ -117,15 +120,15 @@ def validate_pdf_step(step_input: StepInput) -> StepOutput:
     return StepOutput(content=sonuc.extracted_text)
 ```
 
-`extract_cv` çıktısı (`CandidateProfile`, tipli) → çağıranın (`single_cv_workflow`
-ya da batch'teki executor) `previous_step_content`'i olur.
+`extract_cv` çıktısı tipli bir `CandidateProfile`'dır. Bu çıktı, çağıranın
+(`single_cv_workflow` ya da toplu moddaki executor) `previous_step_content`'i olur.
 
 ---
 
 ## 3. Tekli Mod — `single_cv_workflow`
 
-`cv_processing_workflow`'u bir adım olarak sarar (nested workflow-as-step), sonuna
-sadece tekli modda gereken nitel analiz adımını ekler:
+`single_cv_workflow`, `cv_processing_workflow`'u bir adım olarak sarar (nested
+workflow-as-step). Sonuna sadece tekli modda gereken nitel analiz adımını ekler:
 
 ```python
 single_cv_workflow = Workflow(steps=[
@@ -164,12 +167,13 @@ def submit_cv(run_context, files):
 
 ---
 
-## 4. Toplu Mod — `finalize_batch`: Aynı Tarifi N Kez, Paralel
+## 4. Toplu Mod — `finalize_batch`: Aynı Tarif, N Kez, Paralel
 
-Toplu mod, `submit_cv` sırasında **hiçbir şey işlemez** — sadece ham dosyaları
-biriktirir (bkz. §3). Tüm işleme (doğrulama + çıkarım + skorlama), `finalize_batch`
-çağrıldığında **hepsi aynı anda**, her biri **aynı `cv_processing_workflow`'u**
-çalıştıran bir `Parallel` bloğunda yapılır:
+Toplu modda, `submit_cv` hiçbir dosyayı işlemez. `submit_cv` sadece ham dosyaları
+biriktirir (bkz. §3). `finalize_batch` çağrıldığında, tüm işleme (doğrulama +
+çıkarım + skorlama) başlar. Bu işleme hepsi için aynı anda olur. Her dal aynı
+`cv_processing_workflow`'u çalıştırır. Bu paralel çalışma bir `Parallel` bloğunda
+olur:
 
 ```python
 class ProcessAndScoreExecutor:
@@ -222,55 +226,57 @@ def finalize_batch(run_context):
 
 **Bu tasarımın kilit noktası:** `ProcessAndScoreExecutor.__call__` içindeki
 `cv_processing_workflow.arun(files=[self.file])` satırı, `single_cv_workflow`'un
-`process` adımının yaptığı **birebir aynı çağrı**. Tekli/toplu arasındaki tek fark,
-kaç kez ve ne zaman (hemen mi, `finalize_batch`'te toplu mu) çağrıldığı — pipeline'ın
-kendisi değil.
+`process` adımıyla aynı çağrıdır. Tekli mod ve toplu mod arasındaki tek fark, bu
+çağrının kaç kez ve ne zaman yapıldığıdır (hemen mi, `finalize_batch`'te toplu mu).
+Pipeline'ın kendisi değişmez.
 
-**Bilinen trade-off:** Doğrulama artık `finalize_batch`'e kadar ertelendiği için,
-5 CV'den biri bozuksa kullanıcı bunu ancak hepsini gönderip `/done` dedikten sonra
-öğrenir (erken geri bildirim yok). Bunun karşılığında tek, tutarlı bir pipeline elde
-ediyoruz — bilinçli bir tercih, `ARCHITECTURE.md` §11'de kayıtlı.
+**Bilinen bir bedel:** Doğrulama artık `finalize_batch`'e kadar ertelenir. 5
+CV'den biri bozuksa, kullanıcı bunu ancak hepsini gönderip `/done` dedikten sonra
+öğrenir. Erken geri bildirim yoktur. Bunun karşılığında tek, tutarlı bir pipeline
+elde edilir. Bu bilinçli bir karardır (bkz. `ARCHITECTURE.md` §11).
 
 ---
 
 ## 5. Extraction Agent
 
 **Dosya:** `agents/extraction_agent.py`
-**Rolü:** LLM Extraction — ham, dağınık CV metnini ortak `CandidateProfile` JSON
+**Rolü:** LLM Extraction. Ham, dağınık CV metnini ortak `CandidateProfile` JSON
 şemasına normalize eder (ödevin "farklı formatları standartlaştırma" gereksinimi).
 **`output_schema`:** `CandidateProfile` (`full_name`, `skills`, `work_experience`,
 `languages`, `education`)
 **Instructions (özet):** *"Sana verilen ham CV metninden yalnızca açıkça belirtilmiş
-bilgileri çıkar. Emin olmadığın alanları boş bırak, uydurma."*
-**Çağrılma şekli:** `cv_processing_workflow`'un 2. adımı — düz bir Agent step.
-Hem tekli hem toplu modda **aynı şekilde** çağrılır çünkü ikisi de aynı workflow'u
-kullanır.
+bilgileri çıkar. Emin olmadığın alanları boş bırak. Bilgi uydurma."*
+**Çağrılma şekli:** `cv_processing_workflow`'un 2. adımıdır — düz bir Agent step.
+Tekli mod ve toplu mod bu adımı aynı şekilde çağırır, çünkü ikisi de aynı
+workflow'u kullanır.
 
 ## 6. Analysis Agent (tekli CV)
 
 **Dosya:** `agents/analysis_agent.py`
-**Rolü:** Tek bir `CandidateProfile` + kullanıcının dinamik kriterlerini alıp nitel
-bir İK raporu üretir.
+**Rolü:** Bir `CandidateProfile` alır, kullanıcının dinamik kriterlerini alır, ve
+nitel bir İK raporu üretir.
 **`output_schema`:** `SingleAnalysisResult` (`candidate_name`, `strengths`,
 `weaknesses`, `recommendations`, `markdown_report`)
 **Instructions (özet):** *"Bir İK uzmanı gibi davran. Sadece verilen kriterlere göre
-değerlendir, kriter dışı özellikleri yorumlama. Güçlü/zayıf yönleri ve somut gelişim
-tavsiyelerini Türkçe, okunaklı bir Markdown raporu olarak üret."*
-**Çağrılma şekli:** `single_cv_workflow`'un `analyze_cv` adımı içinden. Sadece tekli
-modda kullanılır — toplu mod nitel rapor değil, skor üretir (bkz. Scoring Agent).
+değerlendir. Kriter dışı özellikleri yorumlama. Güçlü ve zayıf yönleri, ve somut
+gelişim tavsiyelerini, Türkçe ve okunaklı bir Markdown raporu olarak üret."*
+**Çağrılma şekli:** `single_cv_workflow`'un `analyze_cv` adımından çağrılır. Bu
+ajan sadece tekli modda çalışır — toplu mod nitel rapor değil, skor üretir (bkz.
+Scoring Agent).
 
 ## 7. Scoring Agent (çoklu CV)
 
 **Dosya:** `agents/scoring_agent.py`
-**Rolü:** Bir `CandidateProfile` + dinamik kriter listesini alıp **her kritere ayrı
-ayrı 0-100 arası puan** verir (ödevin `dynamicScores` alanı).
+**Rolü:** Bir `CandidateProfile` ve dinamik kriter listesini alır. Her kritere ayrı
+ayrı 0-100 arası puan verir (ödevin `dynamicScores` alanı).
 **`output_schema`:** `CandidateScore` alt kümesi — `dynamicScores: dict[str, int]`,
 `hrEvaluation: str` (kısa gerekçe).
-**Çağrılma şekli:** `ProcessAndScoreExecutor` içinden, `cv_processing_workflow`
-tamamlandıktan **hemen sonra**, aynı paralel dal içinde. Tüm dallar Agno'nun native
-`Parallel`'ı ile aynı anda çalışır — elle `asyncio.gather`/`Semaphore` yazılmıyor.
-**Sıralama:** `averageScore` `rank_top3_fn` içinde Python'da hesaplanır (LLM'e
-bırakılmaz — aritmetik ortalama deterministik olmalı), ilk 3 aday `rank` ile döner.
+**Çağrılma şekli:** `ProcessAndScoreExecutor` içinden çağrılır. `cv_processing_workflow`
+bittikten hemen sonra, aynı paralel dal içinde çalışır. Tüm dallar Agno'nun native
+`Parallel`'ı ile aynı anda çalışır. Bu proje elle `asyncio.gather`/`Semaphore` yazmaz.
+**Sıralama:** `averageScore`, `rank_top3_fn` içinde Python'da hesaplanır. Bu
+hesap LLM'e bırakılmaz, çünkü aritmetik ortalama deterministik olmalıdır. İlk 3
+aday `rank` alanıyla döner.
 
 ---
 
@@ -288,13 +294,13 @@ def get_model():
     return OpenAIChat(id=settings.OPENAI_MODEL_ID)
 ```
 
-Tüm ajanlar (Router, Extraction, Analysis, Scoring) modeli bu fabrikadan alır —
-Ollama'ya geçiş tek bir env değişkeni (`MODEL_PROVIDER=ollama`) ile yapılacak, kod
-değişikliği gerekmeyecek. **Not:** Ollama'ya geçildiğinde seçilecek modelin
-tool-calling / structured-output destekleyen bir model olması gerekir (örn.
-`qwen2.5`, `llama3.1`) — bu ARCHITECTURE.md'ye de not düşülmüştür.
+Tüm ajanlar (Router, Extraction, Analysis, Scoring) modeli bu fabrikadan alır.
+Ollama'ya geçiş tek bir env değişkeniyle olur (`MODEL_PROVIDER=ollama`). Bu geçiş
+kod değişikliği gerektirmez. **Not:** Ollama'ya geçince, seçilecek modelin
+tool-calling ve structured-output desteklemesi gerekir (örnek: `qwen2.5`,
+`llama3.1`). Bu not `ARCHITECTURE.md`'de de vardır.
 
-## 9. Session State Şeması (özet — detay `ARCHITECTURE.md` §4)
+## 9. Session State Şeması (özet — ayrıntı `ARCHITECTURE.md` §4)
 
 ```python
 {
