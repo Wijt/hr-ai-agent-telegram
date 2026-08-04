@@ -13,4 +13,6 @@ def get_model():
 
     from agno.models.openai import OpenAIChat
 
-    return OpenAIChat(id=settings.openai_model_id)
+    # reasoning_effort="none": bazı reasoning modelleri (ör. .env'deki proxy model)
+    # tool çağrısıyla birlikte reasoning_effort gönderilirse 400 döndürüyor.
+    return OpenAIChat(id=settings.openai_model_id, reasoning_effort="none")
