@@ -74,3 +74,19 @@ class CVIntake(BaseModel):
             "bulunduysa o adayın candidate_id'si (klasör adı), bulunamadıysa null."
         )
     )
+
+
+class SWOTAnalysis(BaseModel):
+    """Bir adayın normalize edilmiş CV verisine dayanan SWOT analizi."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strengths: List[str] = Field(description="Adayın CV'ye dayanan güçlü yönleri (2-5 madde)")
+    weaknesses: List[str] = Field(description="Gelişime açık / zayıf yönler (2-5 madde)")
+    opportunities: List[str] = Field(
+        description="Bu profile uygun fırsatlar / rol önerileri (2-5 madde)"
+    )
+    threats: List[str] = Field(
+        description="Riskler / rekabet faktörleri, ör. eksik sertifika, dar teknoloji "
+        "yelpazesi (2-5 madde)"
+    )
