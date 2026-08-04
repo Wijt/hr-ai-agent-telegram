@@ -5,7 +5,7 @@ from agno.os import AgentOS
 from agno.os.interfaces.telegram import Telegram
 
 from config import DATA_DIR, settings
-from cv_intake import KNOWLEDGE_DIR, intake_pre_hook
+from cv_intake import KNOWLEDGE_DIR, intake_post_hook, intake_pre_hook
 from models.model_factory import get_model
 
 KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
@@ -39,6 +39,7 @@ agent = Agent(
         "dosya sistemini tekrar kontrol et, eski varsayımında ısrar etme."
     ),
     pre_hooks=[intake_pre_hook],
+    post_hooks=[intake_post_hook],
     knowledge=fs_knowledge,
     search_knowledge=False,
     tools=[*fs_knowledge.get_tools()],
