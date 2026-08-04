@@ -2,7 +2,7 @@ from config import settings
 
 
 def get_model():
-    """AGENTS.md §8 — sağlayıcıyı MODEL_PROVIDER env değişkeni belirler.
+    """Sağlayıcıyı MODEL_PROVIDER env değişkeni belirler.
 
     Tüm ajanlar modeli buradan alır; Ollama'ya geçiş kod değişikliği gerektirmez.
     """
