@@ -13,4 +13,4 @@ def get_model():
 
     from agno.models.openai import OpenAIChat
 
-    return OpenAIChat(id=settings.openai_model_id)
+    return OpenAIChat(id=settings.openai_model_id, reasoning_effort=settings.openai_reasoning_effort)

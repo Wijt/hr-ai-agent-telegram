@@ -13,6 +13,7 @@ class Settings:
     model_provider: str
     openai_api_key: str
     openai_model_id: str
+    openai_reasoning_effort: str | None
     ollama_model_id: str
     ollama_base_url: str
 
@@ -24,6 +25,7 @@ def load_settings() -> Settings:
         model_provider=os.environ.get("MODEL_PROVIDER", "openai"),
         openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
         openai_model_id=os.environ.get("OPENAI_MODEL_ID", "gpt-4o-mini"),
+        openai_reasoning_effort=os.environ.get("OPENAI_REASONING_EFFORT") or None,
         ollama_model_id=os.environ.get("OLLAMA_MODEL_ID", "qwen2.5"),
         ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
     )

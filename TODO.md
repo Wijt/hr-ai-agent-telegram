@@ -12,14 +12,56 @@ yazıldı. **Yeni oturum kod yazmaya başlamadan önce sırasıyla şunları oku
 Aşağıdakiler bu üç dosyada **olmayan**, sadece bu oturumda öğrenilen/kurulan/
 tartışılan ama henüz kalıcı hale getirilmemiş bilgiler.
 
-## 1. Şu anki durum (son commit: `da942e0`)
+## 1. Şu anki durum
 
-- **Aşama 0 — Hello World: ✅ tamamlandı ve gerçek Telegram botuyla doğrulandı.**
-- **Aşama 1 — Sohbet + session (SqliteDb): ✅ tamamlandı**, henüz kullanıcı
-  tarafından "adımı hatırlıyor mu" testi teyit edilmedi (son mesajımda test
-  istendi, cevap bekleniyor).
-- Aşama 2 (dinamik kriter + tekli CV) ve sonrası **henüz kod olarak yazılmadı** —
-  sadece `ARCHITECTURE.md`/`AGENTS.md`'de tasarlandı.
+- **Aşama 0 — Hello World: ✅ tamamlandı, gerçek Telegram botuyla doğrulandı.**
+- **Aşama 1 — Sohbet + session (SqliteDb): ✅ tamamlandı ve doğrulandı.**
+- **Aşama 2 — Bilgi bankası + Değerlendirme: ✅ kod olarak TAMAMLANDI**, ama
+  **henüz gerçek bir OpenAI API key ile canlı test edilmedi.** Mimari, bu
+  dosyanın önceki sürümündeki "Aşama 2 tekli + Aşama 3 toplu, ayrı tool'lar"
+  planından **kökten değişti** — sohbet sırasında kullanıcı, kriter belirleme
+  ve tetikleme mantığının dinamik olması gerektiğini, ayrı bir
+  `set_dynamic_criteria`/`start_batch_session`/`finalize_batch` tool zincirinin
+  gereksiz karmaşıklık olduğunu belirtti. Final tasarım (`ARCHITECTURE.md` §6,
+  `AGENTS.md` §1-§3):
+  - CV'ler geldiğinde **otomatik** işlenip dosya tabanlı bir bilgi bankasına
+    (`data/adaylar/*.md`) yazılır (`submit_cv`, `pre_hook` ile zorunlu çağrı).
+  - Değerlendirme **tamamen kullanıcı talebiyle, o anki cümleden** tetiklenir
+    (`evaluate_candidates(criteria, scope_hint)`) — kriterler hiçbir yerde
+    saklanmaz, her istekte taze gelir. Tekli/toplu ayrımı ayrı tool'lar değil,
+    bulunan aday sayısına göre kod içinde dallanıyor.
+  - Kod tabanı:
+    - `domain/`: `CandidateProfile` (zengin ama düz — nested obje yok),
+      `SingleAnalysisResult`, `CriterionScores`/`CandidateScore`/`BatchAnalysisResult`,
+      `PdfValidationResult`
+    - `services/pdf_validator.py` — 7 birim testiyle doğrulandı (mock'suz,
+      gerçek elle üretilmiş PDF fixture'ları), **hepsi geçiyor**
+    - `services/candidate_store.py` — markdown yazıcı/okuyucu, `slugify`,
+      `resolve_document_path`
+    - `agents/`: `extraction_agent`, `analysis_agent`, `scoring_agent`
+    - `workflows/cv_processing_workflow.py` — `validate_pdf` → `extract_cv`,
+      **LLM'siz uçtan uca test edildi** (geçersiz PDF ile `stop=True` doğru
+      tetikleniyor, `extract_cv` hiç çağrılmıyor)
+    - `workflows/batch_scoring.py` — `Parallel` + `_RankTop3Executor`
+    - `main.py` — `submit_cv`, `evaluate_candidates`, `pre_hook`, tüm wiring.
+      **Construction testi geçti** (dummy token/key ile import+kurulum doğrulandı).
+  - **ÖNEMLİ, KAPANMAMIŞ RİSK:** `FilesystemContextProvider.aquery()`'nin
+    gerçek `Document.uri` formatı **canlı bir LLM çağrısı gerektirdiği için bu
+    oturumda test edilemedi**. `evaluate_candidates`'ta `scope_hint` boşken
+    (en yaygın senaryo — "bunları karşılaştır") tamamen deterministik bir
+    fallback var (`candidate_store.list_all_candidates()`, agentic aramaya
+    hiç bağımlı değil) — bu yüzden ÇEKİRDEK senaryo risksiz. Risk sadece
+    `scope_hint` dolu olduğunda (belirli isim(ler) söylenince) devreye giriyor.
+    **Yeni oturumun ilk işi bu olmalı:** gerçek bir CV yükleyip `scope_hint`'li
+    bir sorgu ("Ahmet'i değerlendir" gibi) deneyip `resolve_document_path`'in
+    gerçekten dosya bulup bulmadığını gözlemlemek; bulamıyorsa
+    `services/candidate_store.py::resolve_document_path`'i gerçek `Document`
+    çıktısına göre düzeltmek.
+  - `CandidateProfile` ayrıca bu oturumda kullanıcının paylaştığı daha zengin
+    bir "NormalizedCV" şemasından seçici olarak genişletildi (`title`, `links`,
+    `total_experience_years`, `work_model`, `employment_type`, `notice_period`,
+    `military_status`, `certifications`, `languages` eklendi) — bilinçli olarak
+    DÜZ tutuldu, nested obje/enum eklenmedi (KISS).
 
 ## 2. Kaynaklar
 
@@ -28,8 +70,8 @@ tartışılan ama henüz kalıcı hale getirilmemiş bilgiler.
 - **Orijinal ödev dokümanı — repo dışında, unutulmasın:**
   `C:\Users\fkaya\OneDrive\Desktop\SisOft\Yapay Zeka Projesi Telegram API Mülakat Ödevi.pdf`
   (repo kökü `SisOft\ilk\` içinde, PDF bir üst klasörde). Tüm mimari kararlar bu
-  dokümanın birebir alıntılarıyla gerekçelendirildi (`ARCHITECTURE.md` içinde
-  §-referanslı alıntılar var); şüpheye düşülürse doğrudan bu dosyaya bakılmalı.
+  dokümanın birebir alıntılarıyla gerekçelendirildi (`ARCHITECTURE.md` §10'da
+  bir karşılama tablosu var); şüpheye düşülürse doğrudan bu dosyaya bakılmalı.
 
 ## 3. Altyapı — repoda yazılı olmayan operasyonel bilgiler
 
@@ -56,205 +98,144 @@ VPS'i var, ngrok yerine bunu kullanıyor. Zaten kurulup **çalışır durumda**:
   çağrılarında `dangerouslyDisableSandbox: true` ile çalışıyor. Bu, dev
   makinenin kendi ortamını etkilemez, sadece bu araç içindeki test kurulumları
   için geçerli bir not.
-- **Dokploy MCP'si bu oturumda bağlıydı** (`mcp__dokploy-mcp__*` araçları) —
-  kullanıcının VPS'indeki Dokploy'u doğrudan yönetebilecek araçlar mevcuttu
-  (application/compose create-deploy-logs vb.), kullanılmadı çünkü kullanıcı
-  socat container'ını kendisi kurdu. Yeni oturumda bu MCP bağlıysa (araç
-  listesinde `dokploy-mcp` görünüyorsa), Aşama 5'teki Docker deploy'unda ya da
-  VPS tarafında bir şey değiştirmek gerekirse kullanıcı adına doğrudan
-  kullanılabilir — sormadan aksiyon alınmamalı, sadece imkan olarak not düşüldü.
+- **Dokploy MCP'si bu oturumda bağlıydı, sonra bağlantısı koptu** (uzun oturum
+  sırasında bir noktada disconnect oldu, sistem mesajıyla bildirildi). Yeni
+  oturumda tekrar bağlıysa, VPS tarafında bir şey değiştirmek gerekirse
+  kullanılabilir — sormadan aksiyon alınmamalı.
 
 **Botu çalıştırma (dev makinede):**
 ```powershell
 cd src
 python main.py
 ```
-`PYTHONPATH` ayarlamaya gerek yok (bkz. §5). `.venv` zaten kurulu; yeni bir
-bağımlılık eklenirse `..\.venv\Scripts\python.exe -m pip install -r requirements.txt`.
+`PYTHONPATH` ayarlamaya gerek yok. `.venv` zaten kurulu; yeni bağımlılık
+eklenirse `..\.venv\Scripts\python.exe -m pip install -r requirements.txt`
+(`pypdf`, `pytest` Aşama 2'de eklendi).
 
-## 4. Neden Agno, neden LangChain değil (özet — detay sadece sohbet geçmişinde vardı)
+**Testleri çalıştırma:**
+```powershell
+.venv\Scripts\python.exe -m pytest tests/ -v
+```
 
-Proje başında LangChain vs Agno karşılaştırması yapıldı, Agno seçildi. Gerekçe
-özetle:
-- **Hazır Telegram interface'i** (`agno.os.interfaces.telegram.Telegram`) —
-  webhook, session/user_id eşleme, medya indirme hazır; LangChain'de "Telegram
-  entegrasyonu" sadece bir chat-history *loader* (RAG için), canlı bot sunmuyor.
-- **`output_schema` ile yapılandırılmış çıktı** — ödevin "LLM Extraction → ortak
-  JSON şeması" gereksinimi için birebir uygun, LangChain'in `with_structured_output`'una
-  denk ama framework'ün geri kalanıyla (Workflow, Telegram interface) daha
-  bütünleşik.
-- **`Workflow` primitifi** — ardışık/paralel çok adımlı ajan zincirleri için
-  resmi, adı konmuş bir desen (`Step`, `Parallel`, `StepOutput(stop=True)`) —
-  bizim "LLM router, kod garantör" ilkemizle (`AGENTS.md` §5) birebir örtüşüyor.
-- **Model-agnostic** — OpenAI'dan Ollama'ya geçiş tek satır (`agno.models.ollama.Ollama`),
-  ödevin "yerel veya uzak LLM" gereksinimini karşılıyor.
-- Karşı taraf (LangChain'in artıları: daha büyük ekosistem/dokümantasyon hacmi,
-  AI kod asistanlarının onu daha "iyi bildiği") bilinçli olarak Agno lehine
-  feda edildi — gerekçe: Agno'nun kendi resmi MCP'si/dokümantasyonu üzerinden
-  doğrudan araştırma yaparak bu dezavantajı bir ölçüde telafi ettik (bkz. §6).
+## 4. Neden Agno, neden LangChain değil (özet)
 
-## 5. Bu oturumda düzeltilen yanlış varsayımlar (tekrar keşfedilmesin diye)
+- **Hazır Telegram interface'i** — webhook, session/user_id eşleme, medya
+  indirme hazır; LangChain'de "Telegram entegrasyonu" sadece bir chat-history
+  *loader*, canlı bot sunmuyor.
+- **`output_schema`** — ödevin "ortak JSON şeması" gereksinimine birebir uygun.
+- **`Workflow` primitifi** (`Step`, `Parallel`, `StepOutput(stop=True)`) — "LLM
+  router, kod garantör" ilkemizle (`AGENTS.md` §5) birebir örtüşüyor.
+- **Model-agnostic** — OpenAI→Ollama geçişi tek satır.
+- LangChain'in artıları (daha büyük ekosistem) bilinçli feda edildi; Agno'nun
+  kendi dokümantasyonunu doğrudan araştırarak telafi edildi.
 
-Bunların hepsi **kurulu Agno paketinin kaynağına bakılarak** ya da resmi
-dokümantasyon araştırılarak doğrulandı, varsayımla değil — yeni oturum da aynı
-disiplini sürdürmeli (`.venv/Lib/site-packages/agno/` yerelde mevcut, doğrudan
-okunabilir).
+## 5. Bu oturumda düzeltilen/doğrulanan Agno API detayları
 
-- **`AgentOS.serve()`'in varsayılan `host`'u `"localhost"`** — uzaktan (Tailscale
-  relay dahil) erişim için `host="0.0.0.0"` şart. `main.py`'de zaten ayarlı,
-  ama yeni bir çalıştırma noktası eklenirse unutulmasın.
-- **`db`, `Agent`'a değil `AgentOS`'a verilmeli.** `AgentOS(db=SqliteDb(...))`,
-  kendi `db`'si olmayan her agent/team/workflow'a otomatik atanıyor
-  (`agno/os/app.py`: `if self.db is not None and agent.db is None: agent.db = self.db`).
-  Aşama 2-3'te eklenecek `cv_processing_workflow`, `extraction_agent` vb. hiçbir
-  şey yapmadan aynı db dosyasını (`data/agent-os.db`) paylaşacak.
-- **`src/` altında ayrı bir paket adı (`hrbot/`) yok, bilinçli olarak.**
-  src-layout + `pip install -e .` bir kütüphane dağıtacaksak mantıklı, tek bir
-  bot deploy ederken gereksiz katman — kaldırıldı. Python zaten çalıştırılan
-  script'in dizinini `sys.path`'e otomatik ekliyor.
-- **PowerShell'de ortam değişkeni `$env:VAR="value"` ile ayarlanır**, `set
-  VAR=value` (cmd.exe sözdizimi) PowerShell'de sessizce işe yaramaz.
-- **`data/` klasörü kalıcı veri için, `tmp/` değil** — session/history ve
-  (Aşama 4'te) aday dosyaları atılabilir değil. İkisi de `.gitignore`'da.
-- **Structured output, Workflow adımları arasında string'e çevrilmeden, tipli
-  Pydantic nesnesi olarak akar** — `extract_cv` adımının `output_schema=CandidateProfile`
-  çıktısı, bir sonraki adımın `step_input.previous_step_content`'inde doğrudan
-  `CandidateProfile` örneği olarak gelir (resmi `structured-io-at-each-step-level`
-  örneğiyle doğrulandı).
-- **Tool'lara medya (`files`), `files: Optional[Sequence[File]] = None` gibi bir
-  built-in parametre ile otomatik enjekte edilir** — LLM'in dosya içeriğini
-  argüman olarak "yazdırmasına" gerek yok (`agno/tools/overview` — built-in
-  tool parametreleri: `run_context`, `agent`, `team`, `images`/`videos`/`audios`/`files`).
+Hepsi **kurulu Agno paketinin kaynağına bakılarak** (`.venv/Lib/site-packages/agno/`)
+ya da izole, LLM'siz test scriptleriyle doğrulandı — varsayımla değil. Yeni
+oturum da aynı disiplini sürdürmeli: emin olunmayan bir davranış varsa önce
+`grep`/`cat` ile kaynağa bakılmalı ya da minik bir test scriptiyle denenmeli.
 
-## 6. Bu oturumda kullanılan araştırma yöntemi / bağlı MCP'ler
+- **`AgentOS.serve()`'in varsayılan `host`'u `"localhost"`** — uzaktan erişim
+  için `host="0.0.0.0"` şart.
+- **`db`, `Agent`'a değil `AgentOS`'a verilmeli** — `AgentOS(db=SqliteDb(...))`,
+  kendi `db`'si olmayan her bileşene otomatik atanıyor.
+- **`src/` altında ayrı bir paket adı yok, bilinçli** — Python script'in
+  dizinini otomatik `sys.path`'e ekliyor, `pip install -e .` gereksiz.
+- **PowerShell'de `$env:VAR="value"`**, `set VAR=value` (cmd.exe) sessizce
+  işe yaramaz.
+- **`data/` klasörü kalıcı veri için, `tmp/` değil.**
+- **Structured output, Workflow adımları arasında tipli Pydantic nesnesi
+  olarak akar** (string'e çevrilmez).
+- **`files`, tool'lara built-in parametre olarak otomatik enjekte edilir**
+  (`files: Optional[Sequence[File]] = None`).
+- **`WorkflowRunOutput`'ta `.stopped` diye bir alan YOK.** `stop=True`'yu doğru
+  tespit etmenin yolu: `sonuc.step_results[-1].stop` (izole testle doğrulandı
+  — `RunStatus` her iki durumda da `completed` kalıyor, ona bakılamaz). Bu,
+  kullanıcının kendisi "kodun içine bakabilirsin, str dönerse hata ne demek"
+  diyerek yakalattığı gerçek bir bug'dı — `isinstance(content, str)` ile hata
+  tespiti yanlıştı.
+- **`Parallel` bloğundan sonra `step_input.previous_step_content` SADECE SON
+  dalın çıktısını taşır, hepsini değil!** Her dalın sonucuna ayrı ayrı
+  `step_input.get_step_content(step_adı)` ile erişilmeli (izole testle
+  doğrulandı — bu, fark edilmeseydi ciddi, sessiz bir bug olurdu).
+- **`Workflow.run(files=[...])`, ilk adımın `step_input.files`'ına doğru
+  şekilde ulaşıyor** (izole testle doğrulandı).
+- **`Workflow.arun`/`Agent.arun` mevcut ve `files=`/`input=` kabul ediyor.**
+- **`pre_hooks` (çoğul, liste), `pre_hook` (tekil) değil.** Hook fonksiyonu
+  `run_input: RunInput` (o turun `.files`'ı burada) ve `agent: Agent` (nesnenin
+  kendisi) gibi argümanları isim eşleşmesiyle alabiliyor
+  (`agno/utils/hooks.py: filter_hook_args`). `agent.tool_choice`'u doğrudan
+  mutate ederek belirli bir tool'u zorlamak mümkün — dict formatı
+  (`{"type": "function", "function": {"name": "..."}}`) OpenAI'nin kendi
+  API'sine **birebir, değiştirilmeden** aktarılıyor
+  (`agno/models/openai/chat.py: request_params["tool_choice"] = tool_choice`).
+  Her turda ya zorlanmalı ya da `"auto"`'ya sıfırlanmalı — agent nesnesi
+  turlar arası paylaşıldığı için.
+- **`FilesystemContextProvider.query()`/`aquery(question: str) -> Answer`**
+  bir Agent'a `tools=` olarak bağlamadan **doğrudan çağrılabiliyor**.
+  `Answer(results: list[Document], text)`, `Document(id, name, uri, source,
+  snippet)`. **Ama bu, canlı LLM çağrısı gerektirdiği için `Document.uri`'nin
+  gerçek formatı bu oturumda test edilemedi** — bkz. §1'deki açık risk.
+- **`agno.media.File(content=b"", ...)` Pydantic validasyonunda hata verir**
+  ("en az biri sağlanmalı" — boş bytes "sağlanmamış" sayılıyor). Gerçek
+  Telegram akışında muhtemelen sorun değil (Telegram sıfır byte'lık dosya
+  yüklemeyi zaten engelliyor olabilir) ama not düşüldü, doğrulanmadı.
 
-- **Agno'ya özel bir docs MCP** oturum ortasında kullanıcı tarafından bağlandı
-  (`mcp__<id>__search_agno`, `mcp__<id>__query_docs_filesystem_agno`). Yeni
-  oturumda bu bağlı değilse, aynı içeriğe `WebFetch` ile `docs.agno.com` (özellikle
-  `docs.agno.com/llms.txt` — tüm sayfaların konu bazlı index'i) üzerinden
-  ulaşmak bu oturumda da defalarca işe yaradı, eşdeğer bir fallback.
-- **LangChain'e özel bir docs MCP de bağlıydı** (proje başındaki karşılaştırma
-  için kullanıldı, `docs.langchain.com` içeriği).
-- **En güvenilir doğrulama yöntemi:** kurulu paketin kaynağına doğrudan bakmak
-  (`grep`/`cat` ile `.venv/Lib/site-packages/agno/...`) — dokümantasyon bazen
-  eksik/belirsiz kaldığında (örn. secret token doğrulama mantığı, `AgentOS`
-  constructor'ının tam parametre listesi) bu, varsayımdan çok daha güvenilir
-  sonuç verdi. Emin olunmayan bir Agno davranışı varsa önce buna bakılmalı.
-- **`visualize` (diyagram) aracı** mimari diyagramı çizmek için kullanıldı,
-  README.md'deki Mermaid diyagramı onun GitHub'da render olan eşdeğeri.
+## 6. Araştırma yöntemi / bağlı MCP'ler
 
-## 7. Sıradaki adımlar — Aşama 2 (dinamik kriter + tekli CV analizi)
+- Bu oturumda Agno'ya özel bir docs MCP bağlandı, sonra bağlantısı koptu.
+  Yeni oturumda bağlı değilse `WebFetch` ile `docs.agno.com/llms.txt`
+  (konu bazlı index) eşdeğer bir fallback.
+- **En güvenilir yöntem: kurulu paketin kaynağına doğrudan bakmak**
+  (`grep -rn "..." .venv/Lib/site-packages/agno/`) — dokümantasyon eksik
+  kaldığında (örn. `pre_hooks` argüman listesi, `stop=True` tespiti,
+  `Parallel` çıktı şekli) bu, dokümandan çok daha güvenilir sonuç verdi.
+- **İkinci en güvenilir yöntem: izole, LLM'siz test scriptleri** —
+  `Step`/`Workflow`/`StepOutput` gibi yapıların gerçek çalışma zamanı
+  davranışını (`.stop`, `get_step_content`, `files` akışı) doğrulamak için
+  gerçek bir OpenAI çağrısı gerekmiyor, dummy `executor` fonksiyonlarıyla
+  saniyeler içinde test edilebiliyor. **Bu proje boyunca defalarca gerçek bir
+  hatayı implementasyondan ÖNCE yakaladı** — yeni oturum da LLM gerektirmeyen
+  her mekanizmayı yazmadan önce böyle test etmeli.
 
-`ARCHITECTURE.md` §6, §9, `AGENTS.md` §2, §4, §5'in doğrudan kod karşılığı.
+## 7. Sıradaki adım — canlı test (Aşama 2 doğrulaması)
 
-- [ ] `requirements.txt`'e `pypdf` ekle
-- [ ] `domain/`: `CandidateProfile`, `SingleAnalysisResult`, `PdfValidationResult`
-      (Pydantic modelleri, `ARCHITECTURE.md` §7'deki alan adlarıyla birebir)
-- [ ] `services/pdf_validator.py`: `PdfValidator.validate()` — 6 kontrol sırayla
-      (`ARCHITECTURE.md` §9 tablosu). **LLM içermez.**
-- [ ] `tests/test_pdf_validator.py`: gerçek, elle hazırlanmış bozuk/şifreli/boş/
-      sahte-uzantılı örnek dosyalarla — mock yok (dış çağrı olmadığı için gerek
-      yok). **Bu fixture dosyalar henüz yok, testle birlikte üretilmeli** (örn.
-      `pypdf` ile şifreli bir PDF oluşturmak, geçerli bir PDF'in son N baytını
-      kesip bozuk hâle getirmek, 0 baytlık dosya, `.txt` içeriğini `.pdf` diye
-      kaydetmek).
-- [ ] `agents/extraction_agent.py`: `output_schema=CandidateProfile`
-- [ ] `agents/analysis_agent.py`: `output_schema=SingleAnalysisResult`
-- [ ] `workflows/cv_processing_workflow.py`: `validate_pdf` (function,
-      `StepOutput(stop=True)` kapısı) → `extract_cv` (Agent step) — **tek,
-      paylaşılan tarif**, Aşama 3'te de değişmeden reuse edilecek
-- [ ] `workflows/single_cv_workflow.py`: `cv_processing_workflow`'u iç adım
-      olarak sarar (`Step(workflow=cv_processing_workflow)`) + `analyze_cv`
-      (function-executor, kriter + profili birleştirip `analysis_agent`'ı çağırır)
-- [ ] `session/`: `session_state` şeması (`mode`, `dynamic_criteria`,
-      `batch_files`) + guard yardımcıları
-- [ ] `agents/chat_agent.py`: Router Agent'a tool'lar eklenir —
-      `set_dynamic_criteria`, `submit_cv` (şimdilik sadece idle dalı: kriter
-      varsa `single_cv_workflow`'u hemen çalıştırır). **`pre_hook` ile** o turda
-      dosya varsa `tool_choice="submit_cv"` zorunlu kılınmalı (`ARCHITECTURE.md`
-      §5) — bu, LLM'in dosya geldiğinde tool çağırmayı "unutmasını" imkansız
-      kılan kritik bir güvence, atlanmamalı.
-      `send_media_to_model=False, store_media=True` ayarları da bu adımda gelir.
+Kod tamamlandı, sıradaki iş **kullanıcının kendi OpenAI key'iyle canlı test**:
 
-**Başarı kriteri:** Gerçek bir CV PDF'i gönder, kriter söyle (örn. "React
-tecrübesi ve temiz koda göre skorla"), Markdown rapor gelsin. Bozuk/şifreli/
-sahte-uzantılı bir PDF gönderildiğinde net, anlaşılır bir hata mesajı gelsin —
-hiçbir OpenAI çağrısı yapılmadan.
+1. Botu başlat (`cd src && python main.py`), Telegram'da gerçek bir CV PDF'i
+   gönder → "bilgi bankasına eklendi" mesajı beklenir → `src/data/adaylar/*.md`
+   dosyasının oluştuğu (ve içeriğinin makul olduğu) kontrol edilmeli.
+2. "Bu adayı [kriter]'e göre değerlendir" de → Markdown rapor beklenir.
+3. 2-3 CV daha gönder, "Bunları karşılaştır [kriter]" de → JSON top-3 çıktısı
+   beklenir (ödev şemasıyla birebir: `status`, `processedCVCount`,
+   `userDefinedCriteria`, `topCandidates[]`).
+4. Bozuk/şifreli/sahte-uzantılı bir dosya gönder → net Türkçe hata mesajı,
+   hiçbir OpenAI çağrısı yapılmadan (log'da `extract_cv` adımının hiç
+   çalışmadığı görülebilir).
+5. `scope_hint` gerektiren bir senaryo dene ("sadece Ahmet'i değerlendir") —
+   §1'deki açık riski bununla kapat.
 
-## 8. Ondan sonrası — Aşama 3 (toplu CV + paralel skorlama)
+Hata çıkarsa önce §5'teki doğrulanmış API detaylarına, sonra gerekirse tekrar
+kurulu paketin kaynağına bakılmalı — tahmin yürütülmemeli.
 
-- [ ] `agents/scoring_agent.py`: `output_schema` ile `dynamicScores: dict[str,int]`
-      (`Field(ge=0, le=100)`), `hrEvaluation: str`
-- [ ] `domain/`: `CandidateScore`, `BatchAnalysisResult` — ödev dokümanındaki
-      JSON şemasına **birebir** (camelCase alan adları)
-- [ ] `workflows/batch_processing.py`: `ProcessAndScoreExecutor` (class-based,
-      her paralel dal kendi dosyasını + kriterleri constructor'da taşır,
-      `__call__` içinde **aynı** `cv_processing_workflow.arun(files=[self.file])`
-      + `scoring_agent.arun(...)` çağrılır), `rank_top3_fn` (ortalama +
-      sıralama, **LLM'siz, deterministik**)
-- [ ] Router Agent'a `start_batch_session`, `finalize_batch` tool'ları +
-      `submit_cv`'nin batch dalı (bu moddayken dosyayı **işlemeden** biriktirir)
+## 8. Sonraki iterasyon (v1 sonrası, ödevin çekirdeğine dahil değil)
 
-**Başarı kriteri:** 2-5 CV gönder, `/done` yaz, ödev dokümanındaki JSON
-formatında top-3 sonucu gelsin.
+`ARCHITECTURE.md` §11'de listelenen: Docker/docker-compose, `MODEL_PROVIDER=ollama`
+ile canlı test, OCR destekli taranmış PDF okuma, çoklu kullanıcı yük testleri,
+mesaj bazlı rate limiting.
 
-## 9. Opsiyonel (v1 sonrası, ödevin çekirdeğine dahil değil)
-
-### Aşama 4 — Aday bilgi bankası
-
-Bu, sohbet sırasında derinlemesine araştırıldı, kararı özetliyorum ki yeni
-oturum sıfırdan araştırmasın:
-
-- Agno'da bu iş için **iki ayrı, birbiriyle ilgisiz alt sistem** var:
-  - `agno.knowledge.Knowledge` — vektör veritabanı (ChromaDB/LanceDB, embedding
-    gerektirir), metadata filtreleme, `enable_agentic_knowledge_filters=True`
-    ile agent'ın "Furkan Kaya'yı sor" gibi bir soruyu otomatik `filters={"candidate_name":"Furkan Kaya"}`'ya
-    çevirmesi. Resmi bir örnek **birebir CV senaryosunu** (5 CV, `user_id` metadata'sıyla) gösteriyor.
-  - `agno.context.fs.FilesystemContextProvider` — **vektör DB'siz**, gerçek bir
-    dizin ağacını (`root=...`) sarıp agent'a tek bir `query_<id>` tool'u
-    veriyor; arka planda salt-okunur bir alt-agent dizini gezip dosya okuyor.
-    Hiç embedding/vektör DB gerekmiyor.
-- **Karar: Aşama 4'te `FilesystemContextProvider` kullanılacak, vektör DB
-  (ChromaDB dahil) değil.** Gerekçe: kullanıcının orijinal isteği zaten gerçek
-  "klasör" (`data/adaylar/<aday>/raw_cv.pdf`, `extracted_profile.json`) —
-  bu, buna birebir karşılık geliyor; ödev ölçeğinde (birkaç test adayı) vektör
-  aramaya gerek yok; sıfır ekstra bağımlılık (chromadb/lancedb/embedder yok).
-  Vektör DB (ChromaDB, dosya tabanlı/embedded, sunucu gerekmez) ölçek büyürse
-  belgelenmiş bir yükseltme yolu olarak not edildi, bugün kurulmayacak.
-- Yazma tarafı: `cv_processing_workflow`'a 3. bir adım (`store_to_knowledge`,
-  düz Python fonksiyonu — dosyaları `data/adaylar/...`'a yazar) eklenecek.
-- Okuma tarafı: Router Agent'ın `tools=[...]` listesine
-  `FilesystemContextProvider(root="data/adaylar", model=get_model()).get_tools()`
-  eklenecek.
-
-### Aşama 5
-
-`MODEL_PROVIDER=ollama` ile canlı test, Dockerfile/docker-compose (VPS'te
-zaten Dokploy var, MCP'si bağlıysa deploy için kullanılabilir — bkz. §3).
-
-## 10. Ödevin 4 değerlendirme kriteri — unutulmasın
-
-Ödev dokümanının kendi "Değerlendirme Kriterleri" bölümü (yeni oturum orijinal
-PDF'i okumazsa bunu unutabilir):
+## 9. Ödevin 4 değerlendirme kriteri — unutulmasın
 
 1. **Dinamik Prompt Başarısı** — kriterleri prompt'a gömme, tekli+toplu modları
-   kararlı çalıştırma
+   kararlı çalıştırma (artık ikisi de tek bir `evaluate_candidates` tool'u,
+   "kaç aday bulundu" sayımına göre dallanıyor — ayrı komutlara gerek yok)
 2. **PDF Doğrulama & LLM Extraction Kalitesi** — bozuk yapıları yakalama,
    dağınık metni ortak JSON'a hatasız çıkarma
 3. **Asenkron Süreç ve Bağlam Yönetimi** — thread'lerin kilitlenmemesi, çoklu
    dosyada bot yanıt vermeye devam etmesi, chat geçmişinin korunması
 4. **Vibe Coding Hakimiyeti** — AI ile üretilen kodun mimarisine/dil
    pratiklerine/istisna yönetimine tam hakim olma (mülakatta her satır
-   savunulabilir olmalı)
-
-Her yeni özellik eklenirken bu dördü akılda tutulmalı — özellikle #4: kod
-"çalışıyor" olması yetmez, *neden* böyle yazıldığı açıklanabilir olmalı
-(bu yüzden `ARCHITECTURE.md`/`AGENTS.md`'deki gerekçeler bu kadar ayrıntılı).
-
-## 11. Yeni oturuma tavsiye
-
-Kod yazmadan önce Agno'nun resmi dokümantasyonunu/örneklerini araştırmaya devam
-edin — bu oturumda defalarca, varsayımla ilerlemek yerine ya kurulu paketin
-kaynağına (`.venv/Lib/site-packages/agno/`) bakmanın ya da resmi dokümanları
-aramanın yanlış varsayımları düzelttiği görüldü (§5, §6). Emin olmadığınız bir
-Agno API detayı varsa, tahmin etmek yerine önce doğrulayın.
+   savunulabilir olmalı — bu yüzden `ARCHITECTURE.md`/`AGENTS.md` bu kadar
+   ayrıntılı, ve bu oturumdaki her önemli API varsayımı kod okunarak/test
+   edilerek doğrulandı, kabul edilmedi)
