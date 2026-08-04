@@ -4,7 +4,7 @@ from agno.os import AgentOS
 from agno.os.interfaces.telegram import Telegram
 
 from config import DATA_DIR, settings
-from cv_intake import fs_knowledge, intake_post_hook, intake_pre_hook
+from cv_intake import fs_knowledge, intake_post_hook, intake_pre_hook, resolve_cv_duplicate
 from models.model_factory import get_model
 
 agent = Agent(
@@ -27,13 +27,16 @@ agent = Agent(
         "Kullanıcı içerik/detay istiyorsa (beceriler, deneyim, özet vb.) o zaman get_file "
         "ile oku ve gerçek veriye dayanarak cevap ver. Dosya henüz oluşmamışsa hâlâ "
         "işlendiğini söyle. Kullanıcı 'işlendi ama sen görmüyorsun' derse ona güven, "
-        "dosya sistemini tekrar kontrol et, eski varsayımında ısrar etme."
+        "dosya sistemini tekrar kontrol et, eski varsayımında ısrar etme. "
+        "Bir mesajın başında bekleyen CV kayıt kararlarının listesi verilmişse, kullanıcının "
+        "cevabını buna göre yorumla ve resolve_cv_duplicate tool'unu çağır; hangi karara ait "
+        "olduğu belirsizse tool çağırmadan önce kullanıcıya sor."
     ),
     pre_hooks=[intake_pre_hook],
     post_hooks=[intake_post_hook],
     knowledge=fs_knowledge,
     search_knowledge=False,
-    tools=[*fs_knowledge.get_tools()],
+    tools=[*fs_knowledge.get_tools(), resolve_cv_duplicate],
     session_state={"cv_current_file": None},
     send_media_to_model=False,
     store_media=True,

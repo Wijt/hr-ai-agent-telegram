@@ -74,25 +74,3 @@ class CVIntake(BaseModel):
             "bulunduysa o adayın candidate_id'si (klasör adı), bulunamadıysa null."
         )
     )
-
-
-class DuplicateDecision(BaseModel):
-    """Aynı isimde zaten kayıtlı bir aday bulunduğunda kullanıcının serbest metin cevabını sınıflandırır."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    target_filename: Optional[str] = Field(
-        description=(
-            "Session'da birden fazla bekleyen karar varsa, kullanıcının cevabının hangi "
-            "dosyaya ait olduğu (cevapta geçen isim/dosya adına göre eşleştir, ör. "
-            "'kazımı güncelle' -> Kazım'ın dosyası). Tek bir bekleyen varsa ya da cevap "
-            "hangisine ait olduğunu belirtmiyorsa null bırak."
-        )
-    )
-    decision: Literal["update", "new", "unclear"] = Field(
-        description=(
-            "update: kullanıcı mevcut kaydı güncellemek istiyor. "
-            "new: kullanıcı ayrı/yeni bir kayıt istiyor. "
-            "unclear: cevap net değil, tekrar sorulmalı."
-        )
-    )
