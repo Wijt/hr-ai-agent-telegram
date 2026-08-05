@@ -493,10 +493,20 @@ def intake_pre_hook(run_input: RunInput, run_context: RunContext, agent: Agent) 
             listing = "\n".join(f"- {p['filename']} (aday: {p['candidate_id']})" for p in pending_list)
             note = (
                 f"[SİSTEM: Bu session'da şu bekleyen CV kayıt kararları var:\n{listing}\n"
-                "Kullanıcının aşağıdaki mesajı bunlardan birine cevap olabilir. Hangisine ait "
-                "olduğunu (isimden/dosya adından) anlarsan resolve_cv_duplicate tool'unu doğru "
-                "filename ve decision ('update' ya da 'new') ile çağır. Hangisi olduğu "
-                "belirsizse tool çağırma, kullanıcıya hangi CV'yi kastettiğini sor.]"
+                "Kullanıcının aşağıdaki mesajı bunlardan birine cevap OLABİLİR, ama olmak "
+                "ZORUNDA DEĞİL. Üç ihtimal var:\n"
+                "1) Mesaj net bir kayıt cevabıysa ('güncelle', 'yeni', 'ikisini de güncelle' "
+                "vb.) ve hangi CV'ye ait olduğu anlaşılıyorsa: resolve_cv_duplicate tool'unu "
+                "doğru filename ve decision ('update' ya da 'new') ile çağır.\n"
+                "2) Mesaj bir kayıt cevabı ama hangi CV'ye ait olduğu belirsizse: tool "
+                "çağırma, hangi CV'yi kastettiğini sor.\n"
+                "3) Mesaj bu soruyla İLGİSİZ, başka bir istekse (analiz, karşılaştırma, "
+                "puanlama, bilgi sorusu vb.): bekleyen kararları TAMAMEN GÖRMEZDEN GEL ve "
+                "kullanıcının asıl isteğini normal şekilde yerine getir. Kullanıcıyı önce "
+                "kayıt kararı vermeye ZORLAMA, isteğini bu yüzden reddetme veya erteleme. "
+                "Bekleyen kararlar öylece beklemeye devam eder; istersen cevabının SONUNA "
+                "tek cümlelik bir hatırlatma ekleyebilirsin (o CV'ler henüz kaydedilmediği "
+                "için sonuca dahil değil), ama önce isteneni yap.]"
             )
             run_input.input_content = f"{note}\nKullanıcı mesajı: {original_text}"
 
