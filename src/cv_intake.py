@@ -1,7 +1,9 @@
 """CV alım hattı: dosya varlığı pre_hook ile deterministik tetiklenir (LLM kararına bırakılmaz).
 
-İş arka planda sürer; sonuç hem session_state'e (agent'ın context'ine) düşer hem de
-Telegram'a proaktif bir mesajla iletilir.
+İş arka planda sürer. Sonucun TEK kaynağı dosya sistemidir (knowledgebase); session_state
+sadece "en son yüklenen dosya adı"nı taşır, işleme sonucunu DEĞİL. Kullanıcıya bildirim,
+sonucu chat_agent'a yazdırıp Telegram'a proaktif bir mesajla gönderilerek yapılır
+(bkz. _compose_message).
 """
 
 import asyncio
@@ -40,9 +42,7 @@ fs_knowledge = FileSystemKnowledge(
 # bir gönderim yolu (TelegramTools) icat etmeyelim diye tek bir bot instance'ı paylaşılıyor.
 _telegram_bot = AsyncTeleBot(settings.telegram_token)
 
-# Aynı session_id için chat_agent.arun() çağrılarını serileştirir: birden fazla CV
-# art arda/birlikte gelince aynı SQLite session satırına concurrent yazım oluyor,
-# biri sessizce çakışıp task'ı öldürebiliyordu (bildirim hiç gitmiyordu).
+# Aynı session_id için chat_agent.arun() çağrılarını serileştirir (gerekçe: _compose_message).
 _session_locks: dict[str, asyncio.Lock] = {}
 
 # Toplu CV yüklemede tek tek "CV'ni aldım" mesajı yerine tek bir toplu onay göndermek için:
@@ -214,6 +214,42 @@ def _chat_id_from_session_id(session_id: Optional[str]) -> Optional[int]:
         return None
 
 
+async def _compose_message(
+    chat_agent: Agent,
+    session_id: Optional[str],
+    user_id: Optional[str],
+    prompt: str,
+    fallback: str,
+    log_label: str,
+) -> str:
+    """Arka plan bildirimlerinin metnini chat_agent'a yazdırır; olmazsa fallback'e düşer.
+
+    Ham Telegram gönderimi yerine agent'ın kendisi yazsın ki bu mesajlar onun kendi
+    konuşma geçmişinde de yer alsın (aksi halde agent'ın haberi olmayan ikinci bir akış
+    oluşuyor). Üç çağrı noktasının (kayıt sorusu, sonuç bildirimi, toplu onay) ortak
+    kabuğu burada: aynı session için arun() çağrılarını sıraya sokan kilit, içsel çağrı
+    işareti, boş içerik kontrolü ve hata halinde fallback.
+
+    Kilit şart: birden fazla CV art arda gelince aynı session_id üzerinde arun()
+    concurrent çalışıyordu (aynı SQLite session satırına yazım çakışması), bir task
+    sessizce exception'la ölüp bildirim hiç gitmiyordu.
+    """
+    try:
+        async with _get_session_lock(session_id):
+            run = await chat_agent.arun(
+                input=prompt,
+                session_id=session_id,
+                user_id=user_id,
+                metadata={"cv_intake_internal": True},
+            )
+    except Exception:
+        logger.exception("%s üretilemedi (session_id=%s), yedek metin gönderiliyor.", log_label, session_id)
+        return fallback
+
+    content = run.content
+    return content if isinstance(content, str) and content.strip() else fallback
+
+
 async def _process_cv_background(
     file: File,
     chat_agent: Agent,
@@ -328,20 +364,9 @@ async def _process_cv_background(
             "yoksa ayrı bir kayıt mı açayım? ('güncelle' / 'yeni')"
             f"{bulk_offer_fallback}"
         )
-        try:
-            async with _get_session_lock(session_id):
-                ask_run = await chat_agent.arun(
-                    input=ask_input,
-                    session_id=session_id,
-                    user_id=user_id,
-                    metadata={"cv_intake_internal": True},
-                )
-            message_text = (
-                ask_run.content if isinstance(ask_run.content, str) and ask_run.content.strip() else fallback_ask
-            )
-        except Exception:
-            logger.exception("Duplicate-CV soru mesajı üretilemedi (session_id=%s).", session_id)
-            message_text = fallback_ask
+        message_text = await _compose_message(
+            chat_agent, session_id, user_id, ask_input, fallback_ask, "Duplicate-CV soru mesajı"
+        )
         await send_telegram_message(_telegram_bot, chat_id, message_text)
         return
 
@@ -375,23 +400,9 @@ async def _process_cv_background(
     notify_input += bulk_offer_note
     fallback_notify += bulk_offer_fallback
 
-    # Birden fazla CV art arda/birlikte gelince aynı session_id üzerinde chat_agent.arun()
-    # concurrent çalışıyordu (aynı SQLite session satırına yazım çakışması); bu da bir
-    # task'ın sessizce exception'la ölmesine ve bildirimin hiç gitmemesine yol açıyordu.
-    # Aynı session için arun() çağrılarını sıraya sok, hata olursa da ham sonucu gönder.
-    try:
-        async with _get_session_lock(session_id):
-            notify_run = await chat_agent.arun(
-                input=notify_input,
-                session_id=session_id,
-                user_id=user_id,
-                metadata={"cv_intake_internal": True},
-            )
-        message_text = notify_run.content if isinstance(notify_run.content, str) else fallback_notify
-    except Exception:
-        logger.exception("CV bildirimi üretilemedi (session_id=%s), ham sonuç gönderiliyor.", session_id)
-        message_text = fallback_notify
-
+    message_text = await _compose_message(
+        chat_agent, session_id, user_id, notify_input, fallback_notify, "CV bildirimi"
+    )
     await send_telegram_message(_telegram_bot, chat_id, message_text)
 
 
@@ -443,21 +454,9 @@ async def _send_batch_ack(
                 "sonuç mesajıyla döneceğini söyleyen kısa, samimi bir mesaj yaz. Dosya adlarını listele.]"
             )
 
-        try:
-            async with _get_session_lock(session_id):
-                ack_run = await chat_agent.arun(
-                    input=ack_input,
-                    session_id=session_id,
-                    user_id=user_id,
-                    metadata={"cv_intake_internal": True},
-                )
-            message_text = (
-                ack_run.content if isinstance(ack_run.content, str) and ack_run.content.strip() else fallback_text
-            )
-        except Exception:
-            logger.exception("Toplu CV onay mesajı üretilemedi (session_id=%s), yedek metin gönderiliyor.", session_id)
-            message_text = fallback_text
-
+        message_text = await _compose_message(
+            chat_agent, session_id, user_id, ack_input, fallback_text, "Toplu CV onay mesajı"
+        )
         await send_telegram_message(_telegram_bot, chat_id, message_text)
     finally:
         # Onay mesajı gönderilsin ya da erken dönülsün (chat_id yok vb.), bu batch'e bağlı
