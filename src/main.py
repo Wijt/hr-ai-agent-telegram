@@ -4,7 +4,12 @@ from agno.os import AgentOS
 from agno.os.interfaces.telegram import Telegram
 
 from config import DATA_DIR, settings
-from cv_analysis import analyze_cv_swot, score_cv_against_criteria, score_multiple_candidates
+from cv_analysis import (
+    analyze_cv_swot,
+    score_cv_against_criteria,
+    score_multiple_candidates,
+    summarize_candidates,
+)
 from cv_intake import fs_knowledge, intake_post_hook, intake_pre_hook, resolve_cv_duplicate
 from models.model_factory import get_model
 
@@ -44,8 +49,12 @@ agent = Agent(
         "değil — kullanıcı TEK bir isim söylediyse (ör. 'furkanı skorla') ama arama o "
         "isimle eşleşen birden fazla farklı kayıt bulursa (ör. furkan_kaya, "
         "furkan_kaya_2 — aynı isimli farklı kişiler), bunu ASLA 'kullanıcı hepsini "
-        "kastetti' diye yorumlayıp hepsini otomatik skorlama; bu bir isim çakışmasıdır, "
-        "hangi kişiyi kastettiğini (ör. unvan/şirket sorarak) tool çağırmadan önce sor. "
+        "kastetti' diye yorumlayıp hepsini otomatik skorlama; bu bir isim çakışmasıdır. "
+        "Bu durumda önce summarize_candidates tool'unu (ilgili candidate_id'lerle) çağırıp "
+        "her kaydın unvan/şirket gibi ayırt edici bilgisini al, sonra kullanıcıya BU "
+        "BİLGİYLE bilgilendirilmiş bir soru sor (ör. '1) Lead LLM Engineer @ X, "
+        "2) Elektrik-Elektronik Mühendisi @ Y — hangisini kastettiniz?'); 'hangisini "
+        "kastettiniz' gibi boş, bilgisiz bir soru sorma. "
         "Hangi aday(lar) olduğu net değilse tool çağırmadan önce kullanıcıya sor. "
         "Kullanıcının cümlesinden kriterleri bir liste "
         "olarak çıkar. TEK aday için score_cv_against_criteria, BİRDEN FAZLA aday için "
@@ -66,6 +75,7 @@ agent = Agent(
         analyze_cv_swot,
         score_cv_against_criteria,
         score_multiple_candidates,
+        summarize_candidates,
     ],
     session_state={"cv_current_file": None},
     send_media_to_model=False,
