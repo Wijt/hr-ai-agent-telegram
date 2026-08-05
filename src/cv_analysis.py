@@ -49,7 +49,6 @@ async def analyze_cv_swot(candidate_id: str) -> str:
 
     Args:
         candidate_id: Analiz edilecek adayın candidate_id'si (klasör adı, ör. 'furkan_kaya').
-            Önce list_files/grep_file ile doğru candidate_id'yi bul.
     """
     normalized_path = KNOWLEDGE_DIR / candidate_id / f"{candidate_id}_normalized.json"
     if not normalized_path.exists():
