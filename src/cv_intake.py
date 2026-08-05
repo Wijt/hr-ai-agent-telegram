@@ -46,27 +46,26 @@ _telegram_bot = AsyncTeleBot(settings.telegram_token)
 _session_locks: dict[str, asyncio.Lock] = {}
 
 # Toplu CV yüklemede tek tek "CV'ni aldım" mesajı yerine tek bir toplu onay göndermek için:
-# session başına bekleyen dosya adları + son dosyadan sonra kısa bir sessizlik penceresi.
-_pending_files: dict[str, list[str]] = {}
+# son dosyadan sonra kısa bir sessizlik penceresi (debounce) beklenip tek mesaj yollanıyor.
 _batch_ack_tasks: dict[str, "asyncio.Task"] = {}
 _BATCH_DEBOUNCE_SECONDS = 1.5
 
-# CV işleme, dosya gelir gelmez hemen başlıyor ve toplu onay mesajından ÖNCE bitebiliyor
-# (özellikle hızlı reddedilen küçük/bozuk dosyalarda) — kullanıcı "aldım" demeden önce
-# "reddedildi" mesajını görüyordu. Her batch için bir Event: toplu onay gerçekten
-# gönderilene kadar, o batch'teki hiçbir dosyanın sonuç bildirimi gitmiyor.
-_batch_ack_events: dict[str, asyncio.Event] = {}
-
-# _process_cv_background, batch_ack_event'i bekledikten sonra "bu CV tek başına mı yüklendi,
-# batch'te kaç dosya vardı, hepsi bitti mi" bilgisine ihtiyaç duyuyor (tek yüklemede o adayı
-# ismen anan bir analiz önerisi; çoklu yüklemede TÜM dosyalar bitince TEK bir toplu analiz
-# önerisi) — bu ancak debounce penceresi kapanınca (_send_batch_ack) netleştiği için ayrıca
-# taşınıyor. {"total": int, "completed": int, "candidates": list[str]}.
-# NOT: değeri OKUYAN her _process_cv_background görevi .get() kullanmalı, .pop() DEĞİL —
-# aynı event'i bekleyen N görev "aynı anda" uyanıyor, ilk .pop() eden gerçek değeri alır,
-# geri kalanlar varsayılana düşer (böyle bir race yaşandı). Silme işini SADECE son biten
-# görev (completed >= total olan) yapar.
-_batch_progress: dict[str, dict] = {}
+# Bir "batch" = debounce penceresi içinde art arda gelen dosyalar. Taşıdığı alanlar:
+#   filenames : batch'teki dosya adları (pencere kapanana kadar büyür)
+#   ack_event : toplu onay mesajı gidene kadar sonuç bildirimlerini bekletir. CV işleme dosya
+#               gelir gelmez başlıyor ve onaydan ÖNCE bitebiliyor (özellikle hızlı reddedilen
+#               dosyalarda) — kullanıcı "aldım" demeden "reddedildi" mesajını görüyordu.
+#   total / completed / candidates : "batch'te kaç dosya vardı, hepsi bitti mi, kimler
+#               kaydedildi" — tek yüklemede o adayı ismen anan bir analiz önerisi, çoklu
+#               yüklemede TÜM dosyalar bitince TEK bir toplu öneri yapabilmek için gerekli.
+#
+# Bu sözlük görevlere REFERANSLA geçiliyor, session_id ile anahtarlanmıyor: ilk batch hâlâ
+# işlenirken gelen ikinci bir yükleme, session anahtarlı ortak bir sözlüğü ezip ilk batch'in
+# sayaçlarını bozuyordu (sonuçta her CV kendi "tek CV" analiz önerisini soruyordu). Referansla
+# her görev kendi batch'ini tutuyor: çakışacak ortak anahtar da yok, temizlenecek kayıt da.
+# _pending_batches SADECE "bu session'da hâlâ açık (yeni dosya kabul eden) batch" için;
+# pencere kapanınca buradan düşer, nesne ise onu bekleyen görevlerde yaşamaya devam eder.
+_pending_batches: dict[str, dict] = {}
 
 # Bu run_context'lerin (id() ile) tetikleyen turu, bireysel "aldım" cevabı üretmemeli —
 # toplu onay mesajı zaten bunu karşılıyor. intake_post_hook bunu okuyup run_output.content'i
@@ -220,7 +219,7 @@ async def _process_cv_background(
     chat_agent: Agent,
     session_id: Optional[str],
     user_id: Optional[str],
-    batch_ack_event: Optional[asyncio.Event],
+    batch: Optional[dict],
 ) -> None:
     run_output = await cv_filer_agent.arun(
         input=(
@@ -279,25 +278,23 @@ async def _process_cv_background(
 
     # Bu dosyanın ait olduğu batch'in toplu onay mesajı gerçekten gidene kadar bekle —
     # yoksa hızlı reddedilen dosyalarda sonuç mesajı "aldım" mesajından önce gidebiliyordu.
-    if batch_ack_event is not None:
-        await batch_ack_event.wait()
+    if batch is not None:
+        await batch["ack_event"].wait()
 
     # Bu görev batch'teki KENDİ payını (bu tek dosya) tamamladı — batch'in tamamı bitti mi
-    # diye ortak sayaca bakıyoruz. Tek görev bunu synchronous (await'siz) yapıyor, o yüzden
-    # birden fazla görev "aynı anda" uyansa bile race oluşmuyor (asyncio tek iş parçacıklı,
-    # ara await olmadan bu blok atomik çalışır).
-    progress = _batch_progress.get(session_id) if session_id else None
-    batch_size = progress["total"] if progress is not None else 1
+    # diye ortak sayaca bakıyoruz. Blok await içermiyor, o yüzden aynı event'te "aynı anda"
+    # uyanan N görev arasında race oluşmuyor (asyncio tek iş parçacıklı, ara await olmadan
+    # bu blok atomik çalışır).
+    batch_size = batch["total"] if batch is not None else 1
     is_last_in_batch = False
     batch_candidates: list[str] = []
-    if progress is not None:
+    if batch is not None:
         if saved_candidate_id is not None:
-            progress["candidates"].append(saved_candidate_id)
-        progress["completed"] += 1
-        if progress["completed"] >= progress["total"]:
+            batch["candidates"].append(saved_candidate_id)
+        batch["completed"] += 1
+        if batch["completed"] >= batch["total"]:
             is_last_in_batch = True
-            batch_candidates = progress["candidates"]
-            _batch_progress.pop(session_id, None)
+            batch_candidates = batch["candidates"]
 
     # Batch'in son dosyasıysa, toplu analiz önerisini AYRI bir mesaj/çağrı olarak değil,
     # bu dosyanın kendi sonuç mesajına ekliyoruz — chat agent zaten session durumunu
@@ -398,21 +395,29 @@ async def _process_cv_background(
     await send_telegram_message(_telegram_bot, chat_id, message_text)
 
 
-async def _send_batch_ack(chat_agent: Agent, session_id: str, user_id: Optional[str]) -> None:
-    """Son dosyadan _BATCH_DEBOUNCE_SECONDS sonra, o sırada bekleyen tüm dosyalar için TEK bir onay yollar.
+async def _send_batch_ack(
+    chat_agent: Agent, session_id: str, user_id: Optional[str], batch: dict
+) -> None:
+    """Son dosyadan _BATCH_DEBOUNCE_SECONDS sonra, o batch'teki tüm dosyalar için TEK bir onay yollar.
 
     Yeni bir dosya gelince pre_hook bu task'ı iptal edip yeniden başlatıyor (debounce);
     böylece art arda/birlikte gelen N dosya için N değil, 1 onay mesajı gidiyor.
     """
     await asyncio.sleep(_BATCH_DEBOUNCE_SECONDS)
 
-    filenames = _pending_files.pop(session_id, [])
+    # Pencere kapandı: bundan sonra gelen dosyalar bu batch'e değil yenisine yazılsın, ve
+    # pre_hook artık bu task'ı iptal etmeye kalkmasın. (Araya await girmiyor, blok atomik.)
+    if _pending_batches.get(session_id) is batch:
+        del _pending_batches[session_id]
+
+    filenames = batch["filenames"]
     if not filenames:
         return
 
-    _batch_progress[session_id] = {"total": len(filenames), "completed": 0, "candidates": []}
+    # Dosya listesi bu andan sonra büyümez; batch'in nihai boyutu artık belli.
+    batch["total"] = len(filenames)
 
-    event = _batch_ack_events.get(session_id)
+    event = batch["ack_event"]
     try:
         chat_id = _chat_id_from_session_id(session_id)
         if not chat_id:
@@ -457,8 +462,7 @@ async def _send_batch_ack(chat_agent: Agent, session_id: str, user_id: Optional[
     finally:
         # Onay mesajı gönderilsin ya da erken dönülsün (chat_id yok vb.), bu batch'e bağlı
         # dosya sonuçlarının sonsuza dek beklememesi için event'i her durumda set et.
-        if event is not None:
-            event.set()
+        event.set()
 
 
 def intake_pre_hook(run_input: RunInput, run_context: RunContext, agent: Agent) -> None:
@@ -504,21 +508,31 @@ def intake_pre_hook(run_input: RunInput, run_context: RunContext, agent: Agent) 
 
     run_context.session_state["cv_current_file"] = filename
 
-    batch_event: Optional[asyncio.Event] = None
+    batch: Optional[dict] = None
     if session_id:
-        if session_id not in _pending_files:
-            _batch_ack_events[session_id] = asyncio.Event()
-        batch_event = _batch_ack_events[session_id]
-        _pending_files.setdefault(session_id, []).append(filename)
+        batch = _pending_batches.get(session_id)
+        if batch is None:
+            batch = {
+                "filenames": [],
+                "ack_event": asyncio.Event(),
+                "total": 0,
+                "completed": 0,
+                "candidates": [],
+            }
+            _pending_batches[session_id] = batch
+        else:
+            # Aynı batch hâlâ açık — debounce penceresini baştan başlat. (Kapanmış bir
+            # batch'in ack task'ını iptal etmiyoruz, o kendi onayını göndermeyi sürdürsün.)
+            existing_task = _batch_ack_tasks.get(session_id)
+            if existing_task is not None and not existing_task.done():
+                existing_task.cancel()
 
-        existing_task = _batch_ack_tasks.get(session_id)
-        if existing_task is not None and not existing_task.done():
-            existing_task.cancel()
+        batch["filenames"].append(filename)
         _batch_ack_tasks[session_id] = asyncio.create_task(
-            _send_batch_ack(agent, session_id, run_context.user_id)
+            _send_batch_ack(agent, session_id, run_context.user_id, batch)
         )
 
-    asyncio.create_task(_process_cv_background(file, agent, session_id, run_context.user_id, batch_event))
+    asyncio.create_task(_process_cv_background(file, agent, session_id, run_context.user_id, batch))
 
     original = run_input.input_content
     if isinstance(original, str) and original.strip():
