@@ -4,7 +4,7 @@ from agno.os import AgentOS
 from agno.os.interfaces.telegram import Telegram
 
 from config import DATA_DIR, settings
-from cv_analysis import analyze_cv_swot
+from cv_analysis import analyze_cv_swot, score_cv_against_criteria, score_multiple_candidates
 from cv_intake import fs_knowledge, intake_post_hook, intake_pre_hook, resolve_cv_duplicate
 from models.model_factory import get_model
 
@@ -34,13 +34,32 @@ agent = Agent(
         "olduğu belirsizse tool çağırmadan önce kullanıcıya sor. "
         "Kullanıcı bir adayın SWOT analizini istediğinde: önce list_files/grep_file ile doğru "
         "candidate_id'yi bul (aday kayıtlı değilse bunu söyle), sonra analyze_cv_swot tool'unu "
-        "çağır ve dönen sonucu OLDUĞU GİBİ ilet — zaten güzel formatlanmış, yeniden yazma."
+        "çağır ve dönen sonucu OLDUĞU GİBİ ilet — zaten güzel formatlanmış, yeniden yazma. "
+        "Kullanıcı bir CV'yi kendi belirlediği kriterlere göre puanlamak/analiz etmek "
+        "istediğinde (ör. 'React tecrübesi, temiz kod ve uzaktan çalışma uyumuna göre "
+        "skorla'): önce konuşma geçmişinden hangi aday(lar)dan bahsedildiğini anla — bu "
+        "session'da tek bir aday konuşulduysa/yüklendiyse onu hedefle, birden fazla "
+        "adaydan bahsedildiyse hepsini hedefle. Hangi aday(lar) olduğu net değilse tool "
+        "çağırmadan önce kullanıcıya sor. Kullanıcının cümlesinden kriterleri bir liste "
+        "olarak çıkar. TEK aday için score_cv_against_criteria, BİRDEN FAZLA aday için "
+        "score_multiple_candidates çağır. Bu tool'lar sana YAPILANDIRILMIŞ VERİ (JSON) "
+        "döner, hazır mesaj DEĞİLDİR — sonucu kendin okunaklı bir markdown'a çevir (kriter "
+        "bazlı puanlar, ortalama, güçlü/zayıf yönler, gelişim tavsiyeleri, İK "
+        "değerlendirmesi; çoklu adayda sıralı bir liste); ham JSON'u ASLA kullanıcıya "
+        "gösterme. Kullanıcı tek bir CV yükledikten sonra isterse kriter bazlı analiz "
+        "yapmak isteyip istemediğini nazikçe sorabilirsin."
     ),
     pre_hooks=[intake_pre_hook],
     post_hooks=[intake_post_hook],
     knowledge=fs_knowledge,
     search_knowledge=False,
-    tools=[*fs_knowledge.get_tools(), resolve_cv_duplicate, analyze_cv_swot],
+    tools=[
+        *fs_knowledge.get_tools(),
+        resolve_cv_duplicate,
+        analyze_cv_swot,
+        score_cv_against_criteria,
+        score_multiple_candidates,
+    ],
     session_state={"cv_current_file": None},
     send_media_to_model=False,
     store_media=True,

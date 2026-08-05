@@ -90,3 +90,29 @@ class SWOTAnalysis(BaseModel):
         description="Riskler / rekabet faktörleri, ör. eksik sertifika, dar teknoloji "
         "yelpazesi (2-5 madde)"
     )
+
+
+class CriterionScore(BaseModel):
+    """Kullanıcının belirlediği tek bir kritere göre puan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    criterion: str = Field(description="Değerlendirilen kriter (kullanıcının belirttiği haliyle)")
+    score: int = Field(description="0-100 arası puan", ge=0, le=100)
+    justification: str = Field(description="Bu puanın kısa (1 cümlelik) gerekçesi")
+
+
+class CandidateScoreReport(BaseModel):
+    """scoring_agent'ın output_schema'sı: ortalama hariç, LLM'in ürettiği kısım.
+
+    average_score kasıtlı olarak burada YOK — LLM'ler aritmetikte güvenilmez, ortalama
+    cv_analysis.py'de Python tarafından scores listesinden hesaplanıyor.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    scores: List[CriterionScore] = Field(description="Her kriter için ayrı puan")
+    strengths: List[str] = Field(description="Belirtilen kriterlere göre güçlü yönler (2-5 madde)")
+    weaknesses: List[str] = Field(description="Belirtilen kriterlere göre zayıf yönler (2-5 madde)")
+    development_suggestions: List[str] = Field(description="Gelişim tavsiyeleri (2-5 madde)")
+    hr_evaluation: str = Field(description="Tek cümlelik özet İK değerlendirmesi")
