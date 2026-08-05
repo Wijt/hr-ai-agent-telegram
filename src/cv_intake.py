@@ -57,11 +57,16 @@ _BATCH_DEBOUNCE_SECONDS = 1.5
 # gönderilene kadar, o batch'teki hiçbir dosyanın sonuç bildirimi gitmiyor.
 _batch_ack_events: dict[str, asyncio.Event] = {}
 
-# _process_cv_background, batch_ack_event'i bekledikten sonra "bu CV tek başına mı yüklendi
-# yoksa bir batch'in parçası mıydı" bilgisine ihtiyaç duyuyor (tek yüklemede başarılı kayıt
-# sonrası analiz önerisi sormak zorunlu, çoklu yüklemede değil) — bu ancak debounce penceresi
-# kapanınca (_send_batch_ack) netleştiği için burada ayrıca taşınıyor.
-_batch_sizes: dict[str, int] = {}
+# _process_cv_background, batch_ack_event'i bekledikten sonra "bu CV tek başına mı yüklendi,
+# batch'te kaç dosya vardı, hepsi bitti mi" bilgisine ihtiyaç duyuyor (tek yüklemede o adayı
+# ismen anan bir analiz önerisi; çoklu yüklemede TÜM dosyalar bitince TEK bir toplu analiz
+# önerisi) — bu ancak debounce penceresi kapanınca (_send_batch_ack) netleştiği için ayrıca
+# taşınıyor. {"total": int, "completed": int, "candidates": list[str]}.
+# NOT: değeri OKUYAN her _process_cv_background görevi .get() kullanmalı, .pop() DEĞİL —
+# aynı event'i bekleyen N görev "aynı anda" uyanıyor, ilk .pop() eden gerçek değeri alır,
+# geri kalanlar varsayılana düşer (böyle bir race yaşandı). Silme işini SADECE son biten
+# görev (completed >= total olan) yapar.
+_batch_progress: dict[str, dict] = {}
 
 # Bu run_context'lerin (id() ile) tetikleyen turu, bireysel "aldım" cevabı üretmemeli —
 # toplu onay mesajı zaten bunu karşılıyor. intake_post_hook bunu okuyup run_output.content'i
@@ -277,7 +282,22 @@ async def _process_cv_background(
     if batch_ack_event is not None:
         await batch_ack_event.wait()
 
-    batch_size = _batch_sizes.pop(session_id, 1) if session_id else 1
+    # Bu görev batch'teki KENDİ payını (bu tek dosya) tamamladı — batch'in tamamı bitti mi
+    # diye ortak sayaca bakıyoruz. Tek görev bunu synchronous (await'siz) yapıyor, o yüzden
+    # birden fazla görev "aynı anda" uyansa bile race oluşmuyor (asyncio tek iş parçacıklı,
+    # ara await olmadan bu blok atomik çalışır).
+    progress = _batch_progress.get(session_id) if session_id else None
+    batch_size = progress["total"] if progress is not None else 1
+    is_last_in_batch = False
+    batch_candidates: list[str] = []
+    if progress is not None:
+        if saved_candidate_id is not None:
+            progress["candidates"].append(saved_candidate_id)
+        progress["completed"] += 1
+        if progress["completed"] >= progress["total"]:
+            is_last_in_batch = True
+            batch_candidates = progress["candidates"]
+            _batch_progress.pop(session_id, None)
 
     if ask_candidate_id is not None:
         ask_input = (
@@ -305,6 +325,8 @@ async def _process_cv_background(
             logger.exception("Duplicate-CV soru mesajı üretilemedi (session_id=%s).", session_id)
             message_text = fallback_ask
         await send_telegram_message(_telegram_bot, chat_id, message_text)
+        if is_last_in_batch:
+            await _send_bulk_analysis_offer(chat_agent, session_id, user_id, chat_id, batch_size, batch_candidates)
         return
 
     # Bildirimi de chat_agent'ın kendisi üretsin: raw Telegram gönderimiyle agent'ın
@@ -353,6 +375,55 @@ async def _process_cv_background(
 
     await send_telegram_message(_telegram_bot, chat_id, message_text)
 
+    if is_last_in_batch:
+        await _send_bulk_analysis_offer(chat_agent, session_id, user_id, chat_id, batch_size, batch_candidates)
+
+
+async def _send_bulk_analysis_offer(
+    chat_agent: Agent,
+    session_id: str,
+    user_id: Optional[str],
+    chat_id: int,
+    batch_size: int,
+    candidates: list[str],
+) -> None:
+    """Çoklu CV yüklemesindeki TÜM dosyalar işlenip bitince (batch'in son görevi
+    tarafından) çağrılır — tek tek her aday için değil, TEK bir toplu analiz önerisi
+    gönderir. batch_size==1 ise (tek dosyalık yüklemede) bu zaten devreye girmez, o
+    durumda öneri notify_input içinde adayı ismen anarak zaten soruluyor.
+    """
+    if batch_size <= 1 or not candidates:
+        return
+
+    listing = "\n".join(f"- {cid}" for cid in candidates)
+    fallback_text = (
+        f"Bu toplu yüklemede başarıyla kaydedilen adaylar:\n{listing}\n"
+        "Hepsi için toplu bir karşılaştırma/analiz yapmamı ister misiniz? Kriterlerinizi belirtin."
+    )
+    offer_input = (
+        f"[SİSTEM: Bu toplu yüklemedeki TÜM dosyaların işlenmesi bitti. Başarıyla kaydedilen "
+        f"adaylar:\n{listing}\n"
+        "Kullanıcıya, bu adayları TEK TEK değil TOPLU olarak (score_multiple_candidates ile, "
+        "kriterlerini belirtirse) karşılaştırmalı analiz etmemi isteyip istemediğini sor. "
+        "Adayları isimleriyle say. İstemezse bir şey yapmasına gerek yok.]"
+    )
+    try:
+        async with _get_session_lock(session_id):
+            offer_run = await chat_agent.arun(
+                input=offer_input,
+                session_id=session_id,
+                user_id=user_id,
+                metadata={"cv_intake_internal": True},
+            )
+        message_text = (
+            offer_run.content if isinstance(offer_run.content, str) and offer_run.content.strip() else fallback_text
+        )
+    except Exception:
+        logger.exception("Toplu analiz önerisi üretilemedi (session_id=%s).", session_id)
+        message_text = fallback_text
+
+    await send_telegram_message(_telegram_bot, chat_id, message_text)
+
 
 async def _send_batch_ack(chat_agent: Agent, session_id: str, user_id: Optional[str]) -> None:
     """Son dosyadan _BATCH_DEBOUNCE_SECONDS sonra, o sırada bekleyen tüm dosyalar için TEK bir onay yollar.
@@ -366,7 +437,7 @@ async def _send_batch_ack(chat_agent: Agent, session_id: str, user_id: Optional[
     if not filenames:
         return
 
-    _batch_sizes[session_id] = len(filenames)
+    _batch_progress[session_id] = {"total": len(filenames), "completed": 0, "candidates": []}
 
     event = _batch_ack_events.get(session_id)
     try:
