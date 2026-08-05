@@ -3,9 +3,10 @@
 Alım hattından (cv_intake.py) ayrı tutuluyor: burası sorgu zamanında, zaten
 knowledgebase'de duran adaylar üzerinde çalışıyor, dosya kaydetme işiyle ilgisi yok.
 
-score_cv_against_criteria/score_multiple_candidates prensibi: tool'lar YAPILANDIRILMIŞ
-VERİ (JSON) döner, hazır mesaj değil — kullanıcıya nasıl sunulacağına çağıran chat agent
-karar verir (bkz. main.py'deki instructions).
+Buradaki tool'ların HEPSİ aynı prensibi izler: YAPILANDIRILMIŞ VERİ (JSON) döner, hazır
+mesaj değil — kullanıcıya nasıl sunulacağına çağıran chat agent karar verir (bkz. main.py'deki
+instructions). Böylece agent sonucu isteğe uyarlayabiliyor ("kısa tut", "sadece riskleri
+söyle", skorlamayla birlikte özetle); hazır markdown döndüğünde bu mümkün değildi.
 """
 
 import asyncio
@@ -32,40 +33,42 @@ swot_agent = Agent(
 )
 
 
-def _bullets(items: list[str]) -> str:
-    return "\n".join(f"- {item}" for item in items) if items else "- (belirtilmedi)"
-
-
-# TODO: score_cv_against_criteria/score_multiple_candidates ile aynı mimariye çekilmeli:
-# bu tool kendi markdown'ını üretiyor (return'daki f-string), oysa yeni prensibimiz "tool'lar
-# veri döner, mesajı çağıran chat agent oluşturur". Doğru hal: analyze_cv_swot da SWOTAnalysis'i
-# JSON string olarak dönmeli (bkz. score_cv_against_criteria), main.py'deki agent instructions'ı
-# da SWOT sonucunu kendisi markdown'a çevirecek şekilde güncellenmeli. candidate_id çözümlemesi
-# de (hangi adaydan bahsediliyor, belirsizse sor) diğer tool'larla aynı konuşma-bağlamlı mantığa
-# taşınmalı. Şimdilik dokunulmuyor — mevcut davranış korunuyor, ayrı bir adımda ele alınacak.
 async def analyze_cv_swot(candidate_id: str) -> str:
     """Kayıtlı bir adayın CV'sine dayanan SWOT analizi (güçlü/zayıf yönler, fırsatlar,
-    tehditler) üretir. Kullanıcı bir adayın SWOT analizini istediğinde çağır.
+    tehditler) üretir. YAPILANDIRILMIŞ VERİ (JSON) döner — hazır bir mesaj DEĞİLDİR;
+    sonucu okunaklı bir markdown'a çevirip kullanıcıya sunmak çağıran agent'ın işidir,
+    ham JSON'u kullanıcıya gösterme.
 
     Args:
         candidate_id: Analiz edilecek adayın candidate_id'si (klasör adı, ör. 'furkan_kaya').
     """
     normalized_path = KNOWLEDGE_DIR / candidate_id / f"{candidate_id}_normalized.json"
     if not normalized_path.exists():
-        return f"'{candidate_id}' adında kayıtlı bir aday bulunamadı."
+        return json.dumps(
+            {"status": "error", "message": f"'{candidate_id}' adında kayıtlı bir aday bulunamadı."},
+            ensure_ascii=False,
+        )
 
     cv_json = normalized_path.read_text(encoding="utf-8")
     run_output = await swot_agent.arun(input=cv_json)
     analysis = run_output.content
     if not isinstance(analysis, SWOTAnalysis):
-        return "SWOT analizi üretilemedi."
+        return json.dumps(
+            {"status": "error", "message": "SWOT analizi üretilemedi."}, ensure_ascii=False
+        )
 
-    return (
-        f"**SWOT Analizi — {candidate_id}**\n\n"
-        f"**Güçlü Yönler**\n{_bullets(analysis.strengths)}\n\n"
-        f"**Zayıf Yönler**\n{_bullets(analysis.weaknesses)}\n\n"
-        f"**Fırsatlar**\n{_bullets(analysis.opportunities)}\n\n"
-        f"**Tehditler**\n{_bullets(analysis.threats)}"
+    cv_data = json.loads(cv_json)
+    candidate_name = (cv_data.get("personal_info") or {}).get("full_name") or candidate_id
+
+    return json.dumps(
+        {
+            "status": "success",
+            "candidate_id": candidate_id,
+            "candidate_name": candidate_name,
+            **analysis.model_dump(),
+        },
+        ensure_ascii=False,
+        indent=2,
     )
 
 

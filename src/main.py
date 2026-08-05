@@ -77,16 +77,19 @@ _ADAY_COZUMLEME = (
 
 _TOOL_SECIMI = (
     "TOOL SEÇİMİ — hedef aday(lar) yukarıdaki ADAY ÇÖZÜMLEME ile belirlendikten sonra:\n"
-    "- SWOT analizi isteniyorsa analyze_cv_swot'u çağır ve dönen sonucu OLDUĞU GİBİ ilet — "
-    "zaten güzel formatlanmış, yeniden yazma.\n"
+    "- SWOT analizi isteniyorsa analyze_cv_swot'u çağır.\n"
     "- Kullanıcı kendi belirlediği kriterlere göre puanlama/analiz istiyorsa (ör. 'React "
     "tecrübesi, temiz kod ve uzaktan çalışma uyumuna göre skorla') kriterleri cümlesinden "
     "bir liste olarak çıkar; TEK aday için score_cv_against_criteria, BİRDEN FAZLA aday "
     "için score_multiple_candidates çağır.\n"
-    "Puanlama tool'ları sana YAPILANDIRILMIŞ VERİ (JSON) döner, hazır mesaj DEĞİLDİR — "
-    "sonucu kendin okunaklı bir markdown'a çevir (kriter bazlı puanlar, ortalama, "
-    "güçlü/zayıf yönler, gelişim tavsiyeleri, İK değerlendirmesi; çoklu adayda sıralı bir "
-    "liste); ham JSON'u ASLA kullanıcıya gösterme."
+    "Bu tool'ların HEPSİ sana YAPILANDIRILMIŞ VERİ (JSON) döner, hazır mesaj DEĞİLDİR — "
+    "sonucu kendin okunaklı bir markdown'a çevir; ham JSON'u ASLA kullanıcıya gösterme. "
+    "SWOT'ta dört başlığı da (Güçlü Yönler / Zayıf Yönler / Fırsatlar / Tehditler) madde "
+    "madde ver ve tool'un döndürdüğü maddeleri ATLAMADAN, KISALTMADAN aktar — kullanıcı "
+    "açıkça aksini istemedikçe (ör. 'kısa tut', 'sadece riskleri söyle'). Puanlamada "
+    "kriter bazlı puanlar, ortalama, güçlü/zayıf yönler, gelişim tavsiyeleri ve İK "
+    "değerlendirmesi yer alsın; çoklu adayda sıralı bir liste yap. "
+    "status alanı 'error' ise tool'un message'ını kullanıcıya sade bir cümleyle aktar."
 )
 
 agent = Agent(
