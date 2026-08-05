@@ -57,6 +57,12 @@ _BATCH_DEBOUNCE_SECONDS = 1.5
 # gönderilene kadar, o batch'teki hiçbir dosyanın sonuç bildirimi gitmiyor.
 _batch_ack_events: dict[str, asyncio.Event] = {}
 
+# _process_cv_background, batch_ack_event'i bekledikten sonra "bu CV tek başına mı yüklendi
+# yoksa bir batch'in parçası mıydı" bilgisine ihtiyaç duyuyor (tek yüklemede başarılı kayıt
+# sonrası analiz önerisi sormak zorunlu, çoklu yüklemede değil) — bu ancak debounce penceresi
+# kapanınca (_send_batch_ack) netleştiği için burada ayrıca taşınıyor.
+_batch_sizes: dict[str, int] = {}
+
 # Bu run_context'lerin (id() ile) tetikleyen turu, bireysel "aldım" cevabı üretmemeli —
 # toplu onay mesajı zaten bunu karşılıyor. intake_post_hook bunu okuyup run_output.content'i
 # boşaltır (Telegram arayüzü boş content'te mesaj göndermiyor).
@@ -224,6 +230,7 @@ async def _process_cv_background(
     filename = file.filename or "CV.pdf"
     outcome: Optional[str] = None
     ask_candidate_id: Optional[str] = None
+    saved_candidate_id: Optional[str] = None
 
     if not isinstance(intake, CVIntake) or not intake.is_cv or intake.injection_detected:
         reason = intake.reason if isinstance(intake, CVIntake) and intake.reason else "Geçersiz veya güvensiz belge."
@@ -246,6 +253,7 @@ async def _process_cv_background(
                 ask_candidate_id = matching_id
             else:
                 outcome = f"'{filename}' -> {_persist(intake, file, matching_id)}"
+                saved_candidate_id = matching_id
         elif (KNOWLEDGE_DIR / candidate_id).exists():
             # İsim çakışması var ama hiçbir mevcut kaydın email'i eşleşmiyor —
             # farklı bir kişi. Sormadan ayrı kayıt aç.
@@ -255,8 +263,10 @@ async def _process_cv_background(
                 f"farklı bir e-postayla kayıtlı başka bir aday zaten vardı, bu CV ayrı olarak "
                 f"'{new_id}' altında saklandı.)"
             )
+            saved_candidate_id = new_id
         else:
             outcome = f"'{filename}' -> {_persist(intake, file, candidate_id)}"
+            saved_candidate_id = candidate_id
 
     chat_id = _chat_id_from_session_id(session_id)
     if not chat_id:
@@ -266,6 +276,8 @@ async def _process_cv_background(
     # yoksa hızlı reddedilen dosyalarda sonuç mesajı "aldım" mesajından önce gidebiliyordu.
     if batch_ack_event is not None:
         await batch_ack_event.wait()
+
+    batch_size = _batch_sizes.pop(session_id, 1) if session_id else 1
 
     if ask_candidate_id is not None:
         ask_input = (
@@ -310,6 +322,17 @@ async def _process_cv_background(
         "'kaydedildi' deyip bırakma. Bekleyen bir istek yoksa kısa, samimi bir "
         "tamamlanma bildirimi yeterli."
     )
+    if saved_candidate_id is not None and batch_size == 1:
+        # Kullanıcı bu turda TEK bir CV yükledi ve başarıyla kaydedildi — bu durumda
+        # analiz önerisi sormak opsiyonel değil, zorunlu. Adayı candidate_id'siyle açıkça
+        # anarak soruyoruz ki kullanıcının "evet/harika, başlat" cevabı net bir hedefe
+        # bağlansın (isim çakışmalarında yeniden belirsizliğe düşülmesin).
+        notify_input += (
+            f"\nBu, kullanıcının bu turda yüklediği TEK CV ve '{saved_candidate_id}' olarak "
+            "başarıyla kaydedildi. Bildirimin sonunda, bu aday için (SWOT analizi ya da "
+            f"kriter bazlı bir analiz) başlatmamı isteyip istemediğini candidate_id'yi "
+            f"('{saved_candidate_id}') AÇIKÇA belirterek MUTLAKA sor — bu adımı atlama."
+        )
 
     # Birden fazla CV art arda/birlikte gelince aynı session_id üzerinde chat_agent.arun()
     # concurrent çalışıyordu (aynı SQLite session satırına yazım çakışması); bu da bir
@@ -342,6 +365,8 @@ async def _send_batch_ack(chat_agent: Agent, session_id: str, user_id: Optional[
     filenames = _pending_files.pop(session_id, [])
     if not filenames:
         return
+
+    _batch_sizes[session_id] = len(filenames)
 
     event = _batch_ack_events.get(session_id)
     try:

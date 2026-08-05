@@ -55,6 +55,16 @@ agent = Agent(
         "BİLGİYLE bilgilendirilmiş bir soru sor (ör. '1) Lead LLM Engineer @ X, "
         "2) Elektrik-Elektronik Mühendisi @ Y — hangisini kastettiniz?'); 'hangisini "
         "kastettiniz' gibi boş, bilgisiz bir soru sorma. "
+        "İSTİSNA — SON İŞLEM ÖNCELİKLİDİR: eğer SENİN bir önceki mesajın zaten belirli bir "
+        "candidate_id'yi net şekilde işaret ediyorsa (ör. 'X CV'si işlendi ve furkan_kaya_2 "
+        "olarak kaydedildi' gibi bir bildirim veya bir analiz önerisi) ve kullanıcı hemen "
+        "ardından isim tekrarlamadan o CV/adaydan bahsediyorsa (ör. 'harika, analiz başlatır "
+        "mısın', 'evet başlat'), bunu o SON işlenen candidate_id için bir istek olarak "
+        "yorumla — sormadan devam et. Bildirim mesajında başka bir adayın ismi sadece bilgi "
+        "notu olarak geçmiş olması (ör. '...mevcut X adayından ayrı tutuluyor' notu) bunu "
+        "tekrar belirsiz hale getirmez; disambiguation SADECE kullanıcı isim VERİP de o isim "
+        "birden fazla farklı kayda karşılık geldiğinde gerekir, sırf bir adayın ismi "
+        "konuşmada geçmiş olduğu için değil. "
         "Hangi aday(lar) olduğu net değilse tool çağırmadan önce kullanıcıya sor. "
         "Kullanıcının cümlesinden kriterleri bir liste "
         "olarak çıkar. TEK aday için score_cv_against_criteria, BİRDEN FAZLA aday için "
@@ -62,8 +72,7 @@ agent = Agent(
         "döner, hazır mesaj DEĞİLDİR — sonucu kendin okunaklı bir markdown'a çevir (kriter "
         "bazlı puanlar, ortalama, güçlü/zayıf yönler, gelişim tavsiyeleri, İK "
         "değerlendirmesi; çoklu adayda sıralı bir liste); ham JSON'u ASLA kullanıcıya "
-        "gösterme. Kullanıcı tek bir CV yükledikten sonra isterse kriter bazlı analiz "
-        "yapmak isteyip istemediğini nazikçe sorabilirsin."
+        "gösterme."
     ),
     pre_hooks=[intake_pre_hook],
     post_hooks=[intake_post_hook],
