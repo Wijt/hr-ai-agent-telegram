@@ -299,16 +299,37 @@ async def _process_cv_background(
             batch_candidates = progress["candidates"]
             _batch_progress.pop(session_id, None)
 
+    # Batch'in son dosyasıysa, toplu analiz önerisini AYRI bir mesaj/çağrı olarak değil,
+    # bu dosyanın kendi sonuç mesajına ekliyoruz — chat agent zaten session durumunu
+    # (bu batch'te kimler kaydedildi) görüp tek, doğal bir mesajda ikisini birden yazsın.
+    bulk_offer_note = ""
+    bulk_offer_fallback = ""
+    if is_last_in_batch and batch_size > 1 and batch_candidates:
+        candidates_listing = "\n".join(f"- {cid}" for cid in batch_candidates)
+        bulk_offer_note = (
+            f"\nAyrıca bu, bu toplu yüklemedeki SON dosyanın sonucu — tüm dosyalar işlendi. "
+            f"Bu batch'te başarıyla kaydedilen adaylar:\n{candidates_listing}\n"
+            "Aynı mesajın sonunda, bu adaylar için TOPLU bir karşılaştırma/analiz "
+            "(score_multiple_candidates ile, kriter belirtirse) yapmamı isteyip "
+            "istemediğini de sor."
+        )
+        bulk_offer_fallback = (
+            f"\n\nBu arada, bu toplu yüklemede başarıyla kaydedilen adaylar:\n{candidates_listing}\n"
+            "Hepsi için toplu bir analiz yapmamı ister misiniz?"
+        )
+
     if ask_candidate_id is not None:
         ask_input = (
             f"[SİSTEM: '{filename}' işlendi ama '{ask_candidate_id}' adıyla zaten bir kayıt var ve "
             "muhtemelen aynı kişiye ait (email eşleşiyor ya da CV'de email yok). Kullanıcıya kısaca "
             "sor: mevcut kaydı güncellemek mi istiyor, yoksa ayrı yeni bir kayıt olarak mı saklamamı "
             "istiyor? 'güncelle' ya da 'yeni' gibi net bir kelimeyle cevap vermesini iste.]"
+            f"{bulk_offer_note}"
         )
         fallback_ask = (
             f"'{filename}' için '{ask_candidate_id}' adında zaten bir kayıt var. Güncelleyeyim mi, "
             "yoksa ayrı bir kayıt mı açayım? ('güncelle' / 'yeni')"
+            f"{bulk_offer_fallback}"
         )
         try:
             async with _get_session_lock(session_id):
@@ -325,8 +346,6 @@ async def _process_cv_background(
             logger.exception("Duplicate-CV soru mesajı üretilemedi (session_id=%s).", session_id)
             message_text = fallback_ask
         await send_telegram_message(_telegram_bot, chat_id, message_text)
-        if is_last_in_batch:
-            await _send_bulk_analysis_offer(chat_agent, session_id, user_id, chat_id, batch_size, batch_candidates)
         return
 
     # Bildirimi de chat_agent'ın kendisi üretsin: raw Telegram gönderimiyle agent'ın
@@ -344,6 +363,7 @@ async def _process_cv_background(
         "'kaydedildi' deyip bırakma. Bekleyen bir istek yoksa kısa, samimi bir "
         "tamamlanma bildirimi yeterli."
     )
+    fallback_notify = outcome
     if saved_candidate_id is not None and batch_size == 1:
         # Kullanıcı bu turda TEK bir CV yükledi ve başarıyla kaydedildi — bu durumda
         # analiz önerisi sormak opsiyonel değil, zorunlu. Adayı candidate_id'siyle açıkça
@@ -355,6 +375,8 @@ async def _process_cv_background(
             f"kriter bazlı bir analiz) başlatmamı isteyip istemediğini candidate_id'yi "
             f"('{saved_candidate_id}') AÇIKÇA belirterek MUTLAKA sor — bu adımı atlama."
         )
+    notify_input += bulk_offer_note
+    fallback_notify += bulk_offer_fallback
 
     # Birden fazla CV art arda/birlikte gelince aynı session_id üzerinde chat_agent.arun()
     # concurrent çalışıyordu (aynı SQLite session satırına yazım çakışması); bu da bir
@@ -368,59 +390,10 @@ async def _process_cv_background(
                 user_id=user_id,
                 metadata={"cv_intake_internal": True},
             )
-        message_text = notify_run.content if isinstance(notify_run.content, str) else outcome
+        message_text = notify_run.content if isinstance(notify_run.content, str) else fallback_notify
     except Exception:
         logger.exception("CV bildirimi üretilemedi (session_id=%s), ham sonuç gönderiliyor.", session_id)
-        message_text = outcome
-
-    await send_telegram_message(_telegram_bot, chat_id, message_text)
-
-    if is_last_in_batch:
-        await _send_bulk_analysis_offer(chat_agent, session_id, user_id, chat_id, batch_size, batch_candidates)
-
-
-async def _send_bulk_analysis_offer(
-    chat_agent: Agent,
-    session_id: str,
-    user_id: Optional[str],
-    chat_id: int,
-    batch_size: int,
-    candidates: list[str],
-) -> None:
-    """Çoklu CV yüklemesindeki TÜM dosyalar işlenip bitince (batch'in son görevi
-    tarafından) çağrılır — tek tek her aday için değil, TEK bir toplu analiz önerisi
-    gönderir. batch_size==1 ise (tek dosyalık yüklemede) bu zaten devreye girmez, o
-    durumda öneri notify_input içinde adayı ismen anarak zaten soruluyor.
-    """
-    if batch_size <= 1 or not candidates:
-        return
-
-    listing = "\n".join(f"- {cid}" for cid in candidates)
-    fallback_text = (
-        f"Bu toplu yüklemede başarıyla kaydedilen adaylar:\n{listing}\n"
-        "Hepsi için toplu bir karşılaştırma/analiz yapmamı ister misiniz? Kriterlerinizi belirtin."
-    )
-    offer_input = (
-        f"[SİSTEM: Bu toplu yüklemedeki TÜM dosyaların işlenmesi bitti. Başarıyla kaydedilen "
-        f"adaylar:\n{listing}\n"
-        "Kullanıcıya, bu adayları TEK TEK değil TOPLU olarak (score_multiple_candidates ile, "
-        "kriterlerini belirtirse) karşılaştırmalı analiz etmemi isteyip istemediğini sor. "
-        "Adayları isimleriyle say. İstemezse bir şey yapmasına gerek yok.]"
-    )
-    try:
-        async with _get_session_lock(session_id):
-            offer_run = await chat_agent.arun(
-                input=offer_input,
-                session_id=session_id,
-                user_id=user_id,
-                metadata={"cv_intake_internal": True},
-            )
-        message_text = (
-            offer_run.content if isinstance(offer_run.content, str) and offer_run.content.strip() else fallback_text
-        )
-    except Exception:
-        logger.exception("Toplu analiz önerisi üretilemedi (session_id=%s).", session_id)
-        message_text = fallback_text
+        message_text = fallback_notify
 
     await send_telegram_message(_telegram_bot, chat_id, message_text)
 
