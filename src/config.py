@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -20,9 +21,12 @@ class Settings:
     openai_model_id: str
     ollama_model_id: str
     ollama_base_url: str
+    # Boşsa hiç gönderilmez: Ollama sunucusunun kendi ayarı geçerli kalır.
+    ollama_num_ctx: Optional[int]
 
 
 def load_settings() -> Settings:
+    num_ctx = os.environ.get("OLLAMA_NUM_CTX", "").strip()
     return Settings(
         telegram_token=os.environ["TELEGRAM_TOKEN"],
         app_env=os.environ.get("APP_ENV", "production"),
@@ -31,6 +35,7 @@ def load_settings() -> Settings:
         openai_model_id=os.environ.get("OPENAI_MODEL_ID", "gpt-4o-mini"),
         ollama_model_id=os.environ.get("OLLAMA_MODEL_ID", "qwen2.5"),
         ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"),
+        ollama_num_ctx=int(num_ctx) if num_ctx else None,
     )
 
 

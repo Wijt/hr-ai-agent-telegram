@@ -9,7 +9,16 @@ def get_model():
     if settings.model_provider == "ollama":
         from agno.models.ollama import Ollama
 
-        return Ollama(id=settings.ollama_model_id, host=settings.ollama_base_url)
+        # num_ctx Ollama API'sine options içinde gider. Ollama'nın varsayılan penceresi
+        # (4096) bu botun tek turluk prompt'una yetmiyor ve cevap hata vermeden cümle
+        # ortasında kesiliyor — OLLAMA_NUM_CTX ile büyütülür. Boş bırakılırsa hiç
+        # gönderilmez, Ollama sunucusunun kendi ayarı geçerli kalır.
+        options = {"num_ctx": settings.ollama_num_ctx} if settings.ollama_num_ctx else None
+        return Ollama(
+            id=settings.ollama_model_id,
+            host=settings.ollama_base_url,
+            options=options,
+        )
 
     from agno.models.openai import OpenAIChat
 
