@@ -8,6 +8,7 @@ sonucu chat_agent'a yazdırıp Telegram'a proaktif bir mesajla gönderilerek yap
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -73,10 +74,33 @@ _pending_batches: dict[str, dict] = {}
 _suppress_reply_run_ids: set[int] = set()
 
 # Aynı isimde zaten kayıtlı bir aday bulunduğunda, persist etmeden önce kullanıcıya
-# güncelle/yeni-kayıt diye sorulur; cevap gelene kadar bekleyen karar burada tutulur.
+# güncelle/yeni-kayıt/vazgeç diye sorulur; cevap gelene kadar bekleyen karar burada tutulur.
 # Birden fazla CV aynı anda duplicate çıkabildiği için session başına LİSTE tutuluyor —
 # tek bir slot olsaydı ikinci bir soru ilkini sessizce ezerdi.
 _pending_duplicate_decisions: dict[str, list[dict]] = {}
+_PENDING_DECISION_TTL_SECONDS = 30 * 60
+
+
+def _sweep_stale_decisions() -> None:
+    """Cevapsız kalan kayıt kararlarını süresi dolunca düşürür.
+
+    /new yeni bir session_id üretiyor ve agent'a hiç uğramıyor (Telegram router'ı komutu
+    agent.arun'dan önce kesiyor), yani o session'a bağlı bekleyen karar bir daha ne
+    çözülebiliyor ne iptal edilebiliyor — ama sözlükte, içindeki File nesnesiyle (ham PDF
+    byte'ları) birlikte kalıyordu. Kullanıcı normal akışta devam ederse zaten oto-iptal
+    devreye giriyor; bu süpürme sadece hiç mesaj yazmadan /new denen durum için.
+    """
+    now = time.monotonic()
+    for sid in list(_pending_duplicate_decisions):
+        fresh = [
+            p
+            for p in _pending_duplicate_decisions[sid]
+            if now - p["created_at"] < _PENDING_DECISION_TTL_SECONDS
+        ]
+        if fresh:
+            _pending_duplicate_decisions[sid] = fresh
+        else:
+            del _pending_duplicate_decisions[sid]
 
 
 def _get_session_lock(session_id: str) -> asyncio.Lock:
@@ -166,16 +190,18 @@ def _persist(intake: CVIntake, file: File, candidate_id: str) -> str:
 
 
 def resolve_cv_duplicate(
-    run_context: RunContext, filename: str, decision: Literal["update", "new"]
+    run_context: RunContext, filename: str, decision: Literal["update", "new", "cancel"]
 ) -> str:
-    """Bekleyen bir CV kayıt kararını uygular: mevcut kaydın üzerine yazar ya da ayrı bir
-    kayıt olarak saklar. Kullanıcı, önceden sorulan 'güncelle mi, yeni kayıt mı istiyor'
-    sorusuna cevap verdiğinde çağır.
+    """Bekleyen bir CV kayıt kararını sonuçlandırır: mevcut kaydın üzerine yazar, ayrı bir
+    kayıt olarak saklar ya da işlemden vazgeçer. Kullanıcı önceden sorulan
+    'güncelle mi, yeni kayıt mı, vazgeçeyim mi' sorusuna cevap verdiğinde çağır.
 
     Args:
         filename: Kararın ait olduğu CV dosyasının adı (session'daki bekleyen kayıtlar
             listesinde gördüğün ile birebir aynı olmalı).
-        decision: 'update' mevcut kaydı günceller, 'new' ayrı bir kayıt olarak saklar.
+        decision: 'update' mevcut kaydı günceller, 'new' ayrı bir kayıt olarak saklar,
+            'cancel' hiçbir şey yazmadan bekleyen kaydı düşürür (mevcut kayda dokunulmaz,
+            yüklenen CV kaydedilmez).
     """
     session_id = run_context.session_id
     pending_list = _pending_duplicate_decisions.get(session_id) if session_id else None
@@ -195,6 +221,11 @@ def resolve_cv_duplicate(
     file: File = pending["file"]
     candidate_id: str = pending["candidate_id"]
 
+    if decision == "cancel":
+        return (
+            f"'{filename}' için kayıt işlemi iptal edildi: bu CV kaydedilmedi ve mevcut "
+            f"'{candidate_id}' kaydına dokunulmadı."
+        )
     if decision == "update":
         return _persist(intake, file, candidate_id)
     new_id = _next_available_candidate_id(candidate_id)
@@ -282,12 +313,14 @@ async def _process_cv_background(
             # Email eşleşiyor (ya da ikisi de boş) — muhtemelen aynı kişi tekrar
             # yüklüyor. Persist etmeden önce kullanıcıya sor.
             if session_id:
+                _sweep_stale_decisions()
                 _pending_duplicate_decisions.setdefault(session_id, []).append(
                     {
                         "intake": intake,
                         "file": file,
                         "candidate_id": matching_id,
                         "filename": filename,
+                        "created_at": time.monotonic(),
                     }
                 )
                 ask_candidate_id = matching_id
@@ -355,13 +388,14 @@ async def _process_cv_background(
         ask_input = (
             f"[SİSTEM: '{filename}' işlendi ama '{ask_candidate_id}' adıyla zaten bir kayıt var ve "
             "muhtemelen aynı kişiye ait (email eşleşiyor ya da CV'de email yok). Kullanıcıya kısaca "
-            "sor: mevcut kaydı güncellemek mi istiyor, yoksa ayrı yeni bir kayıt olarak mı saklamamı "
-            "istiyor? 'güncelle' ya da 'yeni' gibi net bir kelimeyle cevap vermesini iste.]"
+            "sor: mevcut kaydı güncellemek mi istiyor, ayrı yeni bir kayıt olarak mı saklamamı "
+            "istiyor, yoksa hiçbir şey yapmayıp vazgeçeyim mi? Üç şıkkı da belirt ve "
+            "'güncelle', 'yeni' ya da 'vazgeç' gibi net bir kelimeyle cevap vermesini iste.]"
             f"{bulk_offer_note}"
         )
         fallback_ask = (
             f"'{filename}' için '{ask_candidate_id}' adında zaten bir kayıt var. Güncelleyeyim mi, "
-            "yoksa ayrı bir kayıt mı açayım? ('güncelle' / 'yeni')"
+            "ayrı bir kayıt mı açayım, yoksa vazgeçeyim mi? ('güncelle' / 'yeni' / 'vazgeç')"
             f"{bulk_offer_fallback}"
         )
         message_text = await _compose_message(
@@ -494,18 +528,21 @@ def intake_pre_hook(run_input: RunInput, run_context: RunContext, agent: Agent) 
                 f"[SİSTEM: Bu session'da şu bekleyen CV kayıt kararları var:\n{listing}\n"
                 "Kullanıcının aşağıdaki mesajı bunlardan birine cevap OLABİLİR, ama olmak "
                 "ZORUNDA DEĞİL. Üç ihtimal var:\n"
-                "1) Mesaj net bir kayıt cevabıysa ('güncelle', 'yeni', 'ikisini de güncelle' "
-                "vb.) ve hangi CV'ye ait olduğu anlaşılıyorsa: resolve_cv_duplicate tool'unu "
-                "doğru filename ve decision ('update' ya da 'new') ile çağır.\n"
+                "1) Mesaj net bir kayıt cevabıysa ('güncelle', 'yeni', 'vazgeç', 'ikisini de "
+                "güncelle' vb.) ve hangi CV'ye ait olduğu anlaşılıyorsa: resolve_cv_duplicate "
+                "tool'unu doğru filename ve decision ('update', 'new' ya da 'cancel') ile "
+                "çağır. Kullanıcı 'boşver', 'gerek yok', 'dokunma', 'kalsın', 'tamam devam' "
+                "gibi bir şey diyorsa decision 'cancel'dır.\n"
                 "2) Mesaj bir kayıt cevabı ama hangi CV'ye ait olduğu belirsizse: tool "
                 "çağırma, hangi CV'yi kastettiğini sor.\n"
                 "3) Mesaj bu soruyla İLGİSİZ, başka bir istekse (analiz, karşılaştırma, "
-                "puanlama, bilgi sorusu vb.): bekleyen kararları TAMAMEN GÖRMEZDEN GEL ve "
-                "kullanıcının asıl isteğini normal şekilde yerine getir. Kullanıcıyı önce "
-                "kayıt kararı vermeye ZORLAMA, isteğini bu yüzden reddetme veya erteleme. "
-                "Bekleyen kararlar öylece beklemeye devam eder; istersen cevabının SONUNA "
-                "tek cümlelik bir hatırlatma ekleyebilirsin (o CV'ler henüz kaydedilmediği "
-                "için sonuca dahil değil), ama önce isteneni yap.]"
+                "puanlama, bilgi sorusu vb.): kullanıcı bu kararla ilgilenmeden devam etmiş "
+                "demektir. ÖNCE asıl isteğini normal şekilde yerine getir — onu kayıt kararı "
+                "vermeye ZORLAMA, isteğini bu yüzden reddetme veya erteleme. SONRA bekleyen "
+                "HER karar için resolve_cv_duplicate'i decision='cancel' ile çağırıp düşür ve "
+                "cevabının sonunda tek cümleyle bildir (ör. 'Bu arada X.pdf için bekleyen "
+                "kayıt kararını iptal ettim — o CV kaydedilmedi, istersen tekrar yükleyebilirsin.'). "
+                "Kararı belirsizce bekletme.]"
             )
             run_input.input_content = f"{note}\nKullanıcı mesajı: {original_text}"
 

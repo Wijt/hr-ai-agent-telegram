@@ -41,7 +41,12 @@ _PERSONA_VE_KAYNAK = (
 _KAYIT_KARARLARI = (
     "Bir mesajın başında bekleyen CV kayıt kararlarının listesi verilmişse, kullanıcının "
     "cevabını buna göre yorumla ve resolve_cv_duplicate tool'unu çağır; hangi karara ait "
-    "olduğu belirsizse tool çağırmadan önce kullanıcıya sor."
+    "olduğu belirsizse tool çağırmadan önce kullanıcıya sor. Kararın üç şıkkı var: "
+    "'update' mevcut kaydı günceller, 'new' ayrı bir kayıt açar, 'cancel' hiçbir şey "
+    "yazmadan vazgeçer. Kullanıcı 'boşver', 'gerek yok', 'dokunma', 'kalsın', 'tamam "
+    "devam' gibi ilgilenmediğini gösteren bir şey söylerse ya da kararla hiç ilgilenmeden "
+    "başka bir isteğe geçerse 'cancel' kullan — kararı belirsizce bekletme, ama iptal "
+    "ettiğini kullanıcıya tek cümleyle mutlaka söyle."
 )
 
 _ADAY_COZUMLEME = (
