@@ -48,11 +48,11 @@ Ollama kullanıyorsanız `OPENAI_*` satırlarını boş bırakabilirsiniz.
 **Context penceresini büyütün.** Ollama'nın varsayılanı 4096 token. Bu botun tek turluk
 prompt'u (ajan talimatları + tool şemaları + CV/SWOT JSON çıktıları + konuşma geçmişi)
 tek başına ~4200 token. Pencereye sığmayınca Ollama prompt'u baştan kırpar, modele
-üretecek yer kalmaz ve **cevap hata vermeden cümle ortasında kesilir**. `12288` canlı
+üretecek yer kalmaz ve **cevap hata vermeden cümle ortasında kesilir**. `16384` canlı
 testte doğrulandı:
 
 ```
-OLLAMA_NUM_CTX=12288
+OLLAMA_NUM_CTX=16384
 ```
 
 VRAM elverirse artırın. Değeri Ollama sunucusunun kendi ayarından yönetmek isterseniz
