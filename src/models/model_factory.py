@@ -18,6 +18,11 @@ def get_model():
             id=settings.ollama_model_id,
             host=settings.ollama_base_url,
             options=options,
+            # Ollama varsayılanı: 5 dakika inaktiflikten sonra modeli VRAM'den atar,
+            # bir sonraki istek load_duration'ı tekrar öder (ölçüldü: 11.7s). -1 =
+            # asla otomatik boşaltma. Sadece bu bot etkilenir, sistemdeki diğer
+            # Ollama istemcilerini değil.
+            keep_alive=-1,
         )
 
     from agno.models.openai import OpenAIChat
