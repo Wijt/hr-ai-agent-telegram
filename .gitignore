@@ -32,3 +32,6 @@ logs/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Notebook ciktilari — uretilen PNG/JSON, kaynak degil
+notebooks/cikti/
