@@ -6,3 +6,4 @@ uvicorn
 sqlalchemy
 pymupdf
 python-slugify
+ollama
