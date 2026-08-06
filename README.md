@@ -8,6 +8,27 @@ yüklenir, arka planda yapılandırılmış veriye çevrilir. Sonra sohbet dilin
 
 ---
 
+## Canlı test
+
+[@furkans_hr_bot](https://t.me/furkans_hr_bot) üzerinden denenebilir. Sistemde deneme
+amaçlı 2 CV zaten yüklü.
+
+> **Herhangi bir yetkilendirme katmanı bulunmuyor ve production'da OpenAI inference
+> kullanılıyor.** KVKK kapsamına giren veya hassas herhangi bir veriyi bota
+> göndermeyin — test için `docs/test-cvs/` altındaki örnek dosyaları kullanın.
+
+`docs/test-cvs/` içindeki dosyalar alım hattının farklı senaryolarını kapsar:
+
+| Dosya | Senaryo |
+|---|---|
+| `Furkan Kaya AI Consultant.pdf` | Normal, sağlam bir CV |
+| `cv_furkan_kaya_ee.pdf` | Uydurma aday (aynı isim, farklı ve gerçek olmayan bir uzmanlık) — isim çakışması testi için |
+| `CV Ahmet Kural.pdf` | CV olmayan bir belge (başvuru checklist'i) — doğrulama adımının reddetmesi beklenir |
+| `CV Merve.pdf` | Bozuk / açılamayan PDF |
+| `CV Emre.pdf` | Şifreli PDF |
+
+---
+
 ## Ekran görüntüleri
 
 <table>
