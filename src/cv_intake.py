@@ -10,6 +10,7 @@ import asyncio
 import logging
 import re
 import time
+import unicodedata
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -113,28 +114,43 @@ def _get_session_lock(session_id: str) -> asyncio.Lock:
     return lock
 
 
-# LaTeX ile üretilmiş PDF'lerde aksanlı harfler tek karakter olarak gömülmüyor: 'ç'
-# yerine 'C' + ayrı bir U+00B8 CEDILLA duruyor. unicodedata.normalize("NFC") bunları
-# birleştiremez, çünkü birleştirici değil BOŞLUKLU karakterler. Kalıp düzenli: üstteki
-# aksanlar harften ÖNCE, alttakiler SONRA geliyor (glifler dikey konuma göre sıralanıyor).
-_AKSAN_ONCE = {
-    "¨": {"u": "ü", "U": "Ü", "o": "ö", "O": "Ö", "i": "ï", "a": "ä"},
-    "˘": {"g": "ğ", "G": "Ğ"},
-    "´": {"e": "é", "a": "á", "i": "í", "o": "ó", "u": "ú"},
-    "ˆ": {"a": "â", "e": "ê", "i": "î", "o": "ô", "u": "û"},
+# LaTeX ile üretilmiş PDF'lerde aksanlı harfler tek precomposed karakter olarak
+# gömülmüyor: 'ç' yerine 'C' + ayrı bir U+00B8 CEDILLA (spacing/boşluklu işaret,
+# BİRLEŞTİRİCİ değil) duruyor. Bu pymupdf'e özgü bir hata değil — PDF'in kendi metin
+# akışı böyle kodlanmış (bkz. pymupdf/PyMuPDF#2279, aynı sınıf sorun pdfminer/poppler'da
+# da var). unicodedata.normalize("NFC") boşluklu işaretleri birleştiremez; önce onları
+# gerçek combining mark'a (U+0300 blok) çevirip taban harfin yanına taşımak gerekiyor,
+# NFC ancak öyle birleştirir. Harf listesi Türkçe'ye özgü DEĞİL — işaret bazlı, bu yüzden
+# aksan kullanan her Latin alfabesi için çalışır (é/à/ê Fransızca, ü/ö/ä Almanca,
+# š/č/ž Çekçe-Slovakça, ą/ę Lehçe, ã/õ Portekizce...).
+_ONCE_GELEN = {  # üstteki aksanlar: LaTeX glif akışında harften ÖNCE duruyor
+    "¨": "̈",  # diaeresis/umlaut (ü, ö, ä, ï)
+    "´": "́",  # acute (é, á, í, ó, ú)
+    "`": "̀",  # grave (è, à, ì, ò, ù)
+    "ˆ": "̂",  # circumflex (â, ê, î, ô, û)
+    "~": "̃",  # tilde (ã, õ, ñ)
+    "˘": "̆",  # breve (ğ)
+    "˚": "̊",  # ring above (å)
+    "ˇ": "̌",  # caron (š, č, ž)
+    "¯": "̄",  # macron (ā, ē)
 }
-_AKSAN_SONRA = {"¸": {"c": "ç", "C": "Ç", "s": "ş", "S": "Ş"}}
+_SONRA_GELEN = {  # alttaki aksanlar: harften SONRA duruyor
+    "¸": "̧",  # cedilla (ç, ş)
+    "˛": "̨",  # ogonek (ą, ę)
+}
 
 
 def _aksan_onar(text: str) -> str:
-    for isaret, tablo in _AKSAN_ONCE.items():
-        for taban, sonuc in tablo.items():
-            text = text.replace(isaret + taban, sonuc)
-    for isaret, tablo in _AKSAN_SONRA.items():
-        for taban, sonuc in tablo.items():
-            text = text.replace(taban + isaret, sonuc)
-    # LaTeX aksanlı harften sonra fazladan boşluk bırakıyor: "Ç IN" -> "ÇIN"
-    return re.sub(r"([çÇşŞğĞüÜöÖ]) (?=[A-Za-zçÇşŞğĞüÜöÖ])", r"\1", text)
+    """LaTeX PDF'lerinde harf+ayrı aksan işareti olarak gömülü karakterleri birleştirir.
+
+    Dil-spesifik bir harf tablosu kullanmaz: işareti combining mark'a çevirip NFC ile
+    birleştirir. Bu yüzden Türkçe dışındaki aksanlı diller için de aynı şekilde çalışır.
+    """
+    for isaret, mark in _ONCE_GELEN.items():
+        text = re.sub(re.escape(isaret) + r"([A-Za-z]) ?", r"\1" + mark, text)
+    for isaret, mark in _SONRA_GELEN.items():
+        text = re.sub(r"([A-Za-z])" + re.escape(isaret) + r" ?", r"\1" + mark, text)
+    return unicodedata.normalize("NFC", text)
 
 
 def _pdf_metni(file: File) -> str:

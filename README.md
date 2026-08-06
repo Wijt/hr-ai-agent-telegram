@@ -94,10 +94,21 @@ Sebebi ölçüldü: dosya girişi yalnızca OpenAI'da çalışıyor.
 Metni biz çıkarınca üç sağlayıcıda da aynı kod yolu çalışıyor ve sayfa görüntüsü
 göndermediğimiz için maliyet çok daha düşük.
 
-**Aksan onarımı.** LaTeX ile üretilmiş PDF'lerde `ç` tek karakter değil: `C` + ayrı bir
-`¸` (U+00B8, boşluklu karakter) olarak gömülü. `unicodedata.normalize("NFC")` bunu
-birleştiremez. `_aksan_onar` deterministik bir tabloyla düzeltiyor — test edilen CV'de
-24 kırık işaret sıfıra indi ve sonuç sayfanın birebir aynısı oldu.
+**Aksan onarımı.** LaTeX ile üretilmiş PDF'lerde `ç` tek precomposed karakter değil:
+`C` + ayrı bir `¸` (U+00B8 CEDILLA, boşluklu/spacing karakter, **birleştirici değil**)
+olarak gömülü. Bu pymupdf'e özgü bir hata değil — PDF'in kendi metin akışı böyle
+kodlanmış; aynı sınıf sorun pdfminer ve poppler'da da var, kütüphane seviyesinde bir
+düzeltme yok ([pymupdf/PyMuPDF#2279](https://github.com/pymupdf/PyMuPDF/issues/2279)).
+`unicodedata.normalize("NFC")` tek başına yetmiyor çünkü boşluklu işaretler NFC'nin
+tanıdığı combining mark'lar değil.
+
+`_aksan_onar` iki adımlı çalışıyor: (1) boşluklu aksan işaretini gerçek bir combining
+mark'a (U+0300 Combining Diacritical Marks bloğu) çevirip taban harfin yanına taşı,
+(2) `unicodedata.normalize("NFC")` ile birleştir. Harf tablosu **Türkçe'ye özgü değil**
+— işaret bazlı (¨ ´ \` ˆ ~ ˘ ˚ ˇ ¯ ¸ ˛), bu yüzden aksan kullanan her Latin alfabesi
+için aynı mekanizma çalışır: Fransızca (é, à, è), Almanca (ü, ö, ä), Çekçe/Slovakça
+(š, č, ž), Lehçe (ą, ę), Portekizce (ã, õ) — sentetik testlerle doğrulandı. Gerçek
+CV'lerde test edildi: 24 kırık işaret sıfıra indi ve sonuç sayfanın birebir aynısı oldu.
 
 **Metin katmanı olmayan PDF** (taranmış görüntü) yüklenirse kullanıcıya bu açıkça
 söyleniyor; belgeyi "geçersiz" diye suçlayan bir mesaj verilmiyor.
