@@ -132,6 +132,8 @@ agent = Agent(
     store_media=True,
     markdown=True,
     add_history_to_context=True,
+    read_chat_history=True,
+    num_history_runs=5
 )
 
 agent_os = AgentOS(
