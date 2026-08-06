@@ -22,25 +22,36 @@ from schemas import CandidateScoreReport, SWOTAnalysis
 swot_agent = Agent(
     name="CV SWOT Analyst",
     model=get_model(),
-    instructions=(
-        "Sana bir adayın normalize edilmiş CV verisi (JSON) verilecek. Bu veriye dayanarak "
-        "objektif bir SWOT analizi yap: strengths (güçlü yönler), weaknesses (gelişime açık "
-        "yönler), opportunities (bu profile uygun fırsatlar/roller), threats (riskler, ör. "
-        "eksik sertifika, dar teknoloji yelpazesi, deneyim boşlukları). Her kategori için "
-        "2-5 madde yaz, kısa ve somut olsun, CV'deki gerçek bilgilere dayansın, uydurma yapma."
-    ),
+    instructions="""# TASK
+You get the normalized CV data of one candidate in JSON.
+Write an objective SWOT analysis from this data.
+
+# FIELDS
+- strengths: the strong points of the candidate.
+- weaknesses: the points that need development.
+- opportunities: the roles and the openings that match this profile.
+- threats: the risks, such as an absent certificate, a narrow range of technologies,
+  or a gap in the work history.
+
+# RULES
+Write 2 to 5 items for each field.
+Keep each item short and concrete.
+Use only the facts in the CV. Never invent a fact.
+Write every item in Turkish.
+""",
     output_schema=SWOTAnalysis,
 )
 
 
 async def analyze_cv_swot(candidate_id: str) -> str:
-    """Kayıtlı bir adayın CV'sine dayanan SWOT analizi (güçlü/zayıf yönler, fırsatlar,
-    tehditler) üretir. YAPILANDIRILMIŞ VERİ (JSON) döner — hazır bir mesaj DEĞİLDİR;
-    sonucu okunaklı bir markdown'a çevirip kullanıcıya sunmak çağıran agent'ın işidir,
-    ham JSON'u kullanıcıya gösterme.
+    """Make a SWOT analysis of a saved candidate from the CV data of that candidate.
+
+    The tool returns structured data. It does not return a ready message. Write the
+    Turkish markdown message yourself. Never show the raw JSON to the user.
 
     Args:
-        candidate_id: Analiz edilecek adayın candidate_id'si (klasör adı, ör. 'furkan_kaya').
+        candidate_id: The candidate_id of the candidate. This is the folder name, for
+            example 'furkan_kaya'.
     """
     normalized_path = KNOWLEDGE_DIR / candidate_id / f"{candidate_id}_normalized.json"
     if not normalized_path.exists():
@@ -75,14 +86,21 @@ async def analyze_cv_swot(candidate_id: str) -> str:
 scoring_agent = Agent(
     name="CV Criteria Scorer",
     model=get_model(),
-    instructions=(
-        "Sana bir adayın normalize edilmiş CV verisi (JSON) ve kullanıcının belirlediği "
-        "değerlendirme kriterleri verilecek. Her kriter için 0-100 arası bir puan ver "
-        "(kısa bir gerekçeyle) — kriterle ilgili veri yoksa düşük puan ver ve gerekçede "
-        "bunu belirt, uydurma yapma. Ardından bu kriterlere göre genel güçlü yönler, "
-        "zayıf yönler ve gelişim tavsiyeleri yaz. Son olarak tek cümlelik bir İK "
-        "değerlendirmesi yaz. Sadece CV'deki gerçek bilgilere dayan."
-    ),
+    instructions="""# TASK
+You get the evaluation criteria of the user.
+You also get the normalized CV data of one candidate in JSON.
+Score the candidate against each criterion.
+
+# RULES
+Give a score from 0 to 100 for each criterion.
+Write a one-sentence justification for each score.
+If the CV holds no data for a criterion, give a low score. Write this fact in the
+justification. Never invent a fact.
+Then write the strengths, the weaknesses, and the development suggestions for these criteria.
+Then write the HR evaluation in one sentence.
+Use only the facts in the CV.
+Write every item in Turkish.
+""",
     output_schema=CandidateScoreReport,
 )
 
@@ -97,7 +115,7 @@ async def _score_candidate(candidate_id: str, criteria: list[str]) -> Optional[d
 
     cv_json = normalized_path.read_text(encoding="utf-8")
     criteria_listing = "\n".join(f"- {c}" for c in criteria)
-    prompt = f"Değerlendirme kriterleri:\n{criteria_listing}\n\nCV verisi (JSON):\n{cv_json}"
+    prompt = f"Evaluation criteria:\n{criteria_listing}\n\nCV data (JSON):\n{cv_json}"
 
     run_output = await scoring_agent.arun(input=prompt)
     report = run_output.content
@@ -122,14 +140,15 @@ async def _score_candidate(candidate_id: str, criteria: list[str]) -> Optional[d
 
 
 async def score_cv_against_criteria(candidate_id: str, criteria: list[str]) -> str:
-    """Bir adayı kullanıcının belirlediği kriterlere göre puanlar. YAPILANDIRILMIŞ VERİ
-    (JSON) döner — hazır bir mesaj DEĞİLDİR; sonucu okunaklı bir markdown'a çevirip
-    kullanıcıya sunmak çağıran agent'ın işidir, ham JSON'u kullanıcıya gösterme.
+    """Score one candidate against the evaluation criteria of the user.
+
+    The tool returns structured data. It does not return a ready message. Write the
+    Turkish markdown message yourself. Never show the raw JSON to the user.
 
     Args:
-        candidate_id: Puanlanacak adayın candidate_id'si.
-        criteria: Kullanıcının belirlediği değerlendirme kriterleri (ör.
-            ["React tecrübesi", "Clean Code", "Uzaktan çalışma uyumu"]).
+        candidate_id: The candidate_id of the candidate to score.
+        criteria: The evaluation criteria of the user. For example:
+            ["React tecrübesi", "Clean Code", "Uzaktan çalışma uyumu"].
     """
     result = await _score_candidate(candidate_id, criteria)
     if result is None:
@@ -141,14 +160,15 @@ async def score_cv_against_criteria(candidate_id: str, criteria: list[str]) -> s
 
 
 async def score_multiple_candidates(candidate_ids: list[str], criteria: list[str]) -> str:
-    """Birden fazla adayı aynı kriterlere göre puanlar, ortalama puana göre sıralar ve en
-    yüksek puanlı ilk 3 adayı döner. YAPILANDIRILMIŞ VERİ (JSON) döner — hazır bir mesaj
-    DEĞİLDİR; sonucu okunaklı bir markdown'a (sıralı liste vb.) çevirip kullanıcıya
-    sunmak çağıran agent'ın işidir, ham JSON'u kullanıcıya gösterme.
+    """Score two or more candidates against the same criteria and rank them.
+
+    The tool returns the three candidates with the highest average score.
+    The tool returns structured data. It does not return a ready message. Write the
+    ranked Turkish markdown list yourself. Never show the raw JSON to the user.
 
     Args:
-        candidate_ids: Puanlanacak adayların candidate_id listesi.
-        criteria: Kullanıcının belirlediği değerlendirme kriterleri.
+        candidate_ids: The candidate_id values of the candidates to score.
+        criteria: The evaluation criteria of the user.
     """
     results = await asyncio.gather(*(_score_candidate(cid, criteria) for cid in candidate_ids))
     valid_results = [r for r in results if r is not None]
@@ -180,13 +200,15 @@ async def score_multiple_candidates(candidate_ids: list[str], criteria: list[str
 
 
 def summarize_candidates(candidate_ids: list[str]) -> str:
-    """Verilen candidate_id'ler için KISA ayırt edici bilgi (ad, unvan, en son şirket)
-    döner — tam CV değil. LLM çağırmaz, sadece dosyadan birkaç alan okur; get_file'dan
-    çok daha ucuzdur. Aynı isimli birden fazla kayıt bulduğunda (isim çakışması),
-    kullanıcıya hangisini kastettiğini BOŞ bir soruyla değil bu bilgiyle sor.
+    """Return short identity data for each candidate_id: name, title, and latest company.
+
+    The tool does not return the full CV. The tool reads a few fields from disk and
+    calls no model. The tool is much cheaper than get_file.
+    If one name matches more than one record, call this tool first. Then ask the user
+    which record is correct with this data. Never ask an empty question.
 
     Args:
-        candidate_ids: Ayırt edilecek adayların candidate_id listesi.
+        candidate_ids: The candidate_id values to compare.
     """
     summaries = []
     for candidate_id in candidate_ids:
