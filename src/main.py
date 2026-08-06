@@ -131,7 +131,34 @@ agent = Agent(
 
 agent_os = AgentOS(
     agents=[agent],
-    interfaces=[Telegram(agent=agent, token=settings.telegram_token)],
+    interfaces=[
+        Telegram(
+            agent=agent,
+            token=settings.telegram_token,
+            start_message=(
+                "👋 *İK yardımcısına hoş geldiniz.*\n\n"
+                "Bana bir aday CV'si gönderin; okuyup kaydedeyim.\n"
+                "Sonra SWOT analizi yapabilir, kriterlerinize göre puanlayabilirim.\n\n"
+                "Komutlar için /help"
+            ),
+            help_message=(
+                "*Neler yapabilirim:*\n\n"
+                "📄 *CV yükleme* — CV gönderin, otomatik okur ve kaydederim.\n"
+                "🧠 *SWOT* — “Furkan'ın SWOT analizini yap”\n"
+                "🎯 *Puanlama* — “React tecrübesi ve temiz koda göre puanla”\n"
+                "📊 *Karşılaştırma* — “Tüm adayları Python'a göre sırala”\n"
+                "🗂 *Durum* — “Ahmet'in CV'si kayıtlı mı?”\n\n"
+                "/new ile konuşmayı sıfırlarsınız."
+            ),
+            new_message="🧹 Yeni konuşma başlattım. Önceki sohbetimizi hatırlamıyorum, ama CV'ler bilgi bankasında duruyor.",
+            error_message="⚠️ Bir hata oluştu. /new ile temiz bir sohbet başlatıp tekrar deneyin.",
+            commands=[
+                {"command": "start", "description": "Botu başlat"},
+                {"command": "help", "description": "Ne yapabileceğimi göster"},
+                {"command": "new", "description": "Yeni konuşma başlat"},
+                {"command": "adaylar", "description": "Kayıtlı adayları listele"},
+            ],
+        )],
     db=SqliteDb(db_file=str(DATA_DIR / "agent-os.db")),
     tracing=True,
 )
