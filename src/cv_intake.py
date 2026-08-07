@@ -7,13 +7,12 @@ sonucu chat_agent'a yazdırıp Telegram'a proaktif bir mesajla gönderilerek yap
 """
 
 import asyncio
-import json
 import logging
 import re
 import time
 import unicodedata
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 
 import fitz  # pymupdf
 from agno.agent import Agent
@@ -22,17 +21,22 @@ from agno.media import File
 from agno.os.interfaces.telegram.helpers import send_message as send_telegram_message
 from agno.run import RunContext
 from agno.run.agent import RunInput
-from slugify import slugify
 from telebot.async_telebot import AsyncTeleBot
 
-from config import DATA_DIR, settings
-from models.model_factory import get_model
+from config import settings
+from utils.model_factory import get_model
 from schemas import CVIntake
+from utils.candidate_store import (
+    KNOWLEDGE_DIR,
+    candidate_slug,
+    find_existing_candidate,
+    next_available_candidate_id,
+    pending_duplicate_decisions,
+    persist,
+    sweep_stale_decisions,
+)
 
 logger = logging.getLogger(__name__)
-
-KNOWLEDGE_DIR = DATA_DIR / "knowledgebase" / "adaylar"
-KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
 
 # Hem cv_filer_agent (dosya işlerken duplicate kontrolü için) hem main.py'deki sohbet agent'ı
 # (kullanıcı sorularını cevaplarken) AYNI instance'ı kullanıyor — tek knowledgebase, tek
@@ -77,36 +81,6 @@ _pending_batches: dict[str, dict] = {}
 # toplu onay mesajı zaten bunu karşılıyor. intake_post_hook bunu okuyup run_output.content'i
 # boşaltır (Telegram arayüzü boş content'te mesaj göndermiyor).
 _suppress_reply_run_ids: set[int] = set()
-
-# Aynı isimde zaten kayıtlı bir aday bulunduğunda, persist etmeden önce kullanıcıya
-# güncelle/yeni-kayıt/vazgeç diye sorulur; cevap gelene kadar bekleyen karar burada tutulur.
-# Birden fazla CV aynı anda duplicate çıkabildiği için session başına LİSTE tutuluyor —
-# tek bir slot olsaydı ikinci bir soru ilkini sessizce ezerdi.
-_pending_duplicate_decisions: dict[str, list[dict]] = {}
-_PENDING_DECISION_TTL_SECONDS = 30 * 60
-
-
-def _sweep_stale_decisions() -> None:
-    """Cevapsız kalan kayıt kararlarını süresi dolunca düşürür.
-
-    /new yeni bir session_id üretiyor ve agent'a hiç uğramıyor (Telegram router'ı komutu
-    agent.arun'dan önce kesiyor), yani o session'a bağlı bekleyen karar bir daha ne
-    çözülebiliyor ne iptal edilebiliyor — ama sözlükte, içindeki File nesnesiyle (ham PDF
-    byte'ları) birlikte kalıyordu. Kullanıcı normal akışta devam ederse zaten oto-iptal
-    devreye giriyor; bu süpürme sadece hiç mesaj yazmadan /new denen durum için.
-    """
-    now = time.monotonic()
-    for sid in list(_pending_duplicate_decisions):
-        fresh = [
-            p
-            for p in _pending_duplicate_decisions[sid]
-            if now - p["created_at"] < _PENDING_DECISION_TTL_SECONDS
-        ]
-        if fresh:
-            _pending_duplicate_decisions[sid] = fresh
-        else:
-            del _pending_duplicate_decisions[sid]
-
 
 def _get_session_lock(session_id: str) -> asyncio.Lock:
     lock = _session_locks.get(session_id)
@@ -192,111 +166,6 @@ cv_filer_agent = Agent(
         "sen sadece belgeden çıkarabildiğin veriyi bildir."
     ),
 )
-
-
-def _slugify(name: str) -> str:
-    # python-slugify (Unidecode sarmalayıcı) sektör standardı transliterasyon: NFKD'nin
-    # ayrıştıramadığı harfleri de (ı, ł, ø, ß, hatta Kiril/Yunan gibi Latin dışı
-    # scriptleri) kapsar. Aynı adayın farklı yazımları (Kazım/Kazim) hep aynı
-    # candidate_id'ye düşer.
-    return slugify(name, separator="_") or "isimsiz_aday"
-
-
-def _find_existing_candidate(email: Optional[str]) -> Optional[str]:
-    """Email'i knowledgebase'deki TÜM adaylarla deterministik karşılaştırır.
-
-    Daha önce bu aramayı cv_filer_agent kendi tool çağrılarıyla yapıyordu — küçük bir
-    model N eşleşen dosyanın hepsini get_file ile okumayı atlayabiliyor ve bir sonraki
-    adayı (ör. furkan_kaya_2) hiç kontrol etmeden 'eşleşme yok' diyebiliyordu. Email
-    zaten CVIntake içinde çıkarılmış veri; ayrıca modele sordurmaya gerek yok.
-    """
-    email_norm = (email or "").strip().lower()
-    if not email_norm:
-        return None
-    for path in KNOWLEDGE_DIR.glob("*/*_normalized.json"):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        existing_email = (data.get("personal_info", {}).get("email") or "").strip().lower()
-        if existing_email and existing_email == email_norm:
-            return path.parent.name
-    return None
-
-
-def _next_available_candidate_id(base_id: str) -> str:
-    n = 2
-    while (KNOWLEDGE_DIR / f"{base_id}_{n}").exists():
-        n += 1
-    return f"{base_id}_{n}"
-
-
-def _persist(intake: CVIntake, file: File, candidate_id: str) -> str:
-    cv = intake.cv
-    candidate_dir = KNOWLEDGE_DIR / candidate_id
-    raw_dir = candidate_dir / "_raw"
-    raw_dir.mkdir(parents=True, exist_ok=True)
-
-    raw_bytes = file.content
-    if not raw_bytes and file.filepath:
-        raw_bytes = Path(file.filepath).read_bytes()
-    if raw_bytes:
-        (raw_dir / f"{candidate_id}_raw.pdf").write_bytes(raw_bytes)
-
-    # Dosya adı da aday ismini taşımalı: FileSystemKnowledge.list_files sadece filename
-    # veya rel_path'e göre fnmatch yapıyor, jenerik "normalized.json" isim bazlı aramada
-    # hiç eşleşmiyordu.
-    normalized_path = candidate_dir / f"{candidate_id}_normalized.json"
-    normalized_path.write_text(cv.model_dump_json(indent=2), encoding="utf-8")
-
-    skills = ", ".join(cv.skills[:8]) if cv.skills else "belirtilmemiş"
-    return (
-        f"Aday kaydedildi: {candidate_id}. Ad: {cv.personal_info.full_name or 'bilinmiyor'}, "
-        f"Unvan: {cv.personal_info.title or 'belirtilmemiş'}, Beceriler: {skills}"
-    )
-
-
-def resolve_cv_duplicate(
-    run_context: RunContext, filename: str, decision: Literal["update", "new", "cancel"]
-) -> str:
-    """Bekleyen bir CV kayıt kararını sonuçlandırır: mevcut kaydın üzerine yazar, ayrı bir
-    kayıt olarak saklar ya da işlemden vazgeçer. Kullanıcı önceden sorulan
-    'güncelle mi, yeni kayıt mı, vazgeçeyim mi' sorusuna cevap verdiğinde çağır.
-
-    Args:
-        filename: Kararın ait olduğu CV dosyasının adı (session'daki bekleyen kayıtlar
-            listesinde gördüğün ile birebir aynı olmalı).
-        decision: 'update' mevcut kaydı günceller, 'new' ayrı bir kayıt olarak saklar,
-            'cancel' hiçbir şey yazmadan bekleyen kaydı düşürür (mevcut kayda dokunulmaz,
-            yüklenen CV kaydedilmez).
-    """
-    session_id = run_context.session_id
-    pending_list = _pending_duplicate_decisions.get(session_id) if session_id else None
-    if not pending_list:
-        return "Bekleyen bir CV kayıt kararı bulunamadı."
-
-    pending = next((p for p in pending_list if p["filename"] == filename), None)
-    if pending is None:
-        available = ", ".join(p["filename"] for p in pending_list)
-        return f"'{filename}' için bekleyen bir kayıt bulunamadı. Bekleyen dosyalar: {available}"
-
-    pending_list.remove(pending)
-    if not pending_list:
-        _pending_duplicate_decisions.pop(session_id, None)
-
-    intake: CVIntake = pending["intake"]
-    file: File = pending["file"]
-    candidate_id: str = pending["candidate_id"]
-
-    if decision == "cancel":
-        return (
-            f"'{filename}' için kayıt işlemi iptal edildi: bu CV kaydedilmedi ve mevcut "
-            f"'{candidate_id}' kaydına dokunulmadı."
-        )
-    if decision == "update":
-        return _persist(intake, file, candidate_id)
-    new_id = _next_available_candidate_id(candidate_id)
-    return f"{_persist(intake, file, new_id)} (Ayrı kayıt olarak saklandı.)"
 
 
 def _chat_id_from_session_id(session_id: Optional[str]) -> Optional[int]:
@@ -395,14 +264,14 @@ async def _process_cv_background(
     elif not intake.is_cv or intake.injection_detected:
         outcome = f"'{filename}' işlenemedi: {intake.reason or 'Geçersiz veya güvensiz belge.'}"
     else:
-        candidate_id = _slugify(intake.cv.personal_info.full_name or "")
-        matching_id = _find_existing_candidate(intake.cv.personal_info.email)
+        candidate_id = candidate_slug(intake.cv.personal_info.full_name or "")
+        matching_id = find_existing_candidate(intake.cv.personal_info.email)
         if matching_id is not None:
             # Email eşleşiyor — muhtemelen aynı kişi tekrar yüklüyor.
             # Persist etmeden önce kullanıcıya sor.
             if session_id:
-                _sweep_stale_decisions()
-                _pending_duplicate_decisions.setdefault(session_id, []).append(
+                sweep_stale_decisions()
+                pending_duplicate_decisions.setdefault(session_id, []).append(
                     {
                         "intake": intake,
                         "file": file,
@@ -413,20 +282,20 @@ async def _process_cv_background(
                 )
                 ask_candidate_id = matching_id
             else:
-                outcome = f"'{filename}' -> {_persist(intake, file, matching_id)}"
+                outcome = f"'{filename}' -> {persist(intake, file, matching_id)}"
                 saved_candidate_id = matching_id
         elif (KNOWLEDGE_DIR / candidate_id).exists():
             # İsim çakışması var ama hiçbir mevcut kaydın email'i eşleşmiyor —
             # farklı bir kişi. Sormadan ayrı kayıt aç.
-            new_id = _next_available_candidate_id(candidate_id)
+            new_id = next_available_candidate_id(candidate_id)
             outcome = (
-                f"'{filename}' -> {_persist(intake, file, new_id)} (Not: '{candidate_id}' adında "
+                f"'{filename}' -> {persist(intake, file, new_id)} (Not: '{candidate_id}' adında "
                 f"farklı bir e-postayla kayıtlı başka bir aday zaten vardı, bu CV ayrı olarak "
                 f"'{new_id}' altında saklandı.)"
             )
             saved_candidate_id = new_id
         else:
-            outcome = f"'{filename}' -> {_persist(intake, file, candidate_id)}"
+            outcome = f"'{filename}' -> {persist(intake, file, candidate_id)}"
             saved_candidate_id = candidate_id
 
     chat_id = _chat_id_from_session_id(session_id)
@@ -607,7 +476,7 @@ def intake_pre_hook(run_input: RunInput, run_context: RunContext, agent: Agent) 
     # dosya değilse), bunu ayrı bir çağrıyla çözmüyoruz artık — agent'ın kendi normal turuna
     # bekleyen kararların listesini ekliyoruz, o da resolve_cv_duplicate tool'unu çağırıp
     # tek bir doğal cevapta hem kararı uygular hem kullanıcıya haber verir.
-    pending_list = _pending_duplicate_decisions.get(session_id) if session_id else None
+    pending_list = pending_duplicate_decisions.get(session_id) if session_id else None
     if pending_list and not run_input.files:
         original_text = run_input.input_content
         if isinstance(original_text, str) and original_text.strip():

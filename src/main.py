@@ -4,14 +4,13 @@ from agno.os import AgentOS
 from agno.os.interfaces.telegram import Telegram
 
 from config import DATA_DIR, settings
-from cv_analysis import (
-    analyze_cv_swot,
-    score_cv_against_criteria,
-    score_multiple_candidates,
-    summarize_candidates,
-)
-from cv_intake import fs_knowledge, intake_post_hook, intake_pre_hook, resolve_cv_duplicate
-from models.model_factory import get_model
+from cv_intake import fs_knowledge, intake_post_hook, intake_pre_hook
+from utils.model_factory import get_model
+from tools.analyze_cv_swot import analyze_cv_swot
+from tools.resolve_cv_duplicate import resolve_cv_duplicate
+from tools.score_cv_against_criteria import score_cv_against_criteria
+from tools.score_multiple_candidates import score_multiple_candidates
+from tools.summarize_candidates import summarize_candidates
 
 # Talimatlar bölümlere ayrıldı: yeni bir özellik tek bir dev string'in sonuna cümle eklemek
 # yerine ilgili bölüme yazılsın. Özellikle ADAY ÇÖZÜMLEME artık TEK bir yerde yaşıyor —

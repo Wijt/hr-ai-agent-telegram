@@ -100,7 +100,7 @@ class CandidateScoreReport(BaseModel):
     """scoring_agent'ın output_schema'sı: ortalama hariç, LLM'in ürettiği kısım.
 
     average_score kasıtlı olarak burada YOK — LLM'ler aritmetikte güvenilmez, ortalama
-    cv_analysis.py'de Python tarafından scores listesinden hesaplanıyor.
+    utils/scoring.py'de Python tarafından scores listesinden hesaplanıyor.
     """
 
     model_config = ConfigDict(extra="forbid")

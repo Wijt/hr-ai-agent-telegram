@@ -373,11 +373,19 @@ görüyor.
 src/
   main.py              HR Bot ajanı, talimat bölümleri, AgentOS + Telegram
   cv_intake.py         Alım hattı: hook'lar, PDF metni, aksan onarımı, duplicate akışı
-  cv_analysis.py       SWOT ve puanlama ajanları + tool'lar
+  tools/               Ajanın tool'ları — her tool kendi dosyasında, tool'a özgü
+                       helper/ajan aynı dosyanın üstünde
+    analyze_cv_swot.py
+    score_cv_against_criteria.py
+    score_multiple_candidates.py
+    summarize_candidates.py
+    resolve_cv_duplicate.py
+  utils/               Birden fazla modülün paylaştığı ortak helper'lar
+    candidate_store.py KNOWLEDGE_DIR, persist, duplicate karar state'i
+    scoring.py         İki skorlama tool'unun ortak çekirdeği (scoring_agent)
+    model_factory.py   OpenAI / Ollama seçimi
   schemas.py           Pydantic şemaları (model çıktı sözleşmeleri)
   config.py            .env okuma
-  models/
-    model_factory.py   OpenAI / Ollama seçimi
 
 data/                  Çalışma zamanı verisi (git'e girmez)
   knowledgebase/adaylar/<aday_id>/
